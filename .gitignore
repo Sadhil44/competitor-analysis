@@ -1,0 +1,14 @@
+# Root-level secrets
+.env
+
+# Python (backend)
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.venv/
+backend/*.egg-info/
+backend/.pytest_cache/
+backend/.ruff_cache/
+
+# Editors/OS
+.DS_Store
+Thumbs.db

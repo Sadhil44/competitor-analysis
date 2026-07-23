@@ -1,0 +1,40 @@
+# Competitor + crawl-target configuration.
+#
+# This file is the single source of truth for *which* competitors the system
+# tracks and *where* to crawl for each one. Nothing about individual products,
+# prices, SWOT content, or developments belongs here — those are discovered
+# and written to Postgres by the scraping pipeline and agent. This file only
+# ever changes when you add/remove a competitor or adjust crawl targets.
+#
+# Loaded by backend/app/core/config.py at startup and on each scheduled run.
+
+competitors:
+  - slug: greenleaf-gardens
+    name: "GreenLeaf Gardens (placeholder)"
+    website_url: "https://example.com/greenleaf-gardens"
+    active: true
+    notes: >
+      Placeholder competitor for local development. Replace website_url and
+      catalog_urls with a real competitor's public product/collection pages
+      before running the scraper against it.
+    crawl:
+      # Cron expression (5-field, standard cron syntax) consumed by APScheduler.
+      cadence_cron: "0 6 * * *"      # daily at 06:00
+      rate_limit_seconds: 2           # minimum delay between requests to this domain
+      catalog_urls:
+        - "https://example.com/greenleaf-gardens/collections/fertilizer"
+        - "https://example.com/greenleaf-gardens/collections/soil-amendments"
+
+  - slug: bloomcraft-supply
+    name: "BloomCraft Supply (placeholder)"
+    website_url: "https://example.com/bloomcraft-supply"
+    active: true
+    notes: >
+      Second placeholder competitor, kept intentionally distinct from
+      greenleaf-gardens so early pipeline code is proven against more than
+      one config entry before real targets are plugged in.
+    crawl:
+      cadence_cron: "0 6 * * *"
+      rate_limit_seconds: 2
+      catalog_urls:
+        - "https://example.com/bloomcraft-supply/collections/pots-planters"
