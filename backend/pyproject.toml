@@ -16,8 +16,8 @@ dependencies = [
     "pgvector>=0.3.6",
     # Scraping
     "playwright>=1.49",
-    # LLM-based structured extraction
-    "instructor>=1.7",
+    # LLM-based structured extraction — via anthropic's native client.messages.parse(),
+    # not a separate library (see app/scraping/extractor.py)
     "anthropic>=0.40",
     # Agent orchestration
     "claude-agent-sdk>=0.2.110",

@@ -12,15 +12,17 @@ class Product(Base):
 
     Discovered by the scraper expanding a competitor's `catalog_urls`
     (see config/competitors.yaml) — not config-driven itself. `sku` is
-    indexed because the scraper looks products up by it on every crawl to
-    decide "new product" vs. "product we've already seen".
+    nullable because it's often not visible on a listing page; when
+    present it's indexed for lookups, but product identity for
+    find-or-create matching is currently by (competitor_id, name) — see
+    app/scraping/ingest.py.
     """
 
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     competitor_id: Mapped[int] = mapped_column(ForeignKey("competitors.id"))
-    sku: Mapped[str] = mapped_column(String(255), index=True)
+    sku: Mapped[str | None] = mapped_column(String(255), index=True)
     name: Mapped[str] = mapped_column(String(500))
     category: Mapped[str] = mapped_column(String(255), default="")
     url: Mapped[str] = mapped_column(Text)

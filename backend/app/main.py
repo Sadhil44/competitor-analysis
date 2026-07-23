@@ -1,13 +1,9 @@
-"""FastAPI app entry point.
-
-Phase 0 scope: app boots, exposes a health check that also proves the
-competitors.yaml config loads and validates. Data/agent/scheduler routers
-get mounted here in later phases (see app/api/).
-"""
+"""FastAPI app entry point."""
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import competitors, prices, products
 from app.core.config import get_settings, load_competitors_config
 
 app = FastAPI(title="Competitor Analysis API")
@@ -18,6 +14,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(competitors.router)
+app.include_router(products.router)
+app.include_router(prices.router)
 
 
 @app.get("/health")
