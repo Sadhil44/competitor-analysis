@@ -27,36 +27,63 @@ async def seed_competitors(session: AsyncSession) -> None:
     await session.commit()
 
 
+MAX_PAGES_PER_CATALOG_URL = 5
+
+
+def _paginated_url(url: str, page_num: int) -> str:
+    if page_num == 1:
+        return url
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}page={page_num}"
+
+
 async def ingest_page(session: AsyncSession, competitor_slug: str, url: str) -> None:
-    """Fetch `url`, extract products, and write Product + PriceObservation
-    rows for the competitor identified by `competitor_slug`.
+    """Fetch up to MAX_PAGES_PER_CATALOG_URL pages of `url`, extract products
+    from each, and write Product + PriceObservation rows for the competitor
+    identified by `competitor_slug`.
+
+    Pages beyond the first are requested via a `page=N` query param (the
+    common convention, e.g. Shopify's `?page=N`). Not every site uses this —
+    stopping early once a page yields zero products we haven't already seen
+    this run handles both "reached the real end of the catalog" and "this
+    site doesn't support page=N at all and just re-served the same page"
+    gracefully, without needing per-site pagination logic.
     """
     result = await session.execute(select(Competitor).where(Competitor.slug == competitor_slug))
     competitor = result.scalar_one_or_none()
     if competitor is None:
         raise ValueError(f"Unknown competitor slug: {competitor_slug!r} — run seed_competitors first")
 
-    page_text = await fetch_page_text(url)
-    extracted = await extract_products(page_text)
+    seen_names: set[str] = set()
 
-    for item in extracted.products:
-        result = await session.execute(
-            select(Product).where(Product.competitor_id == competitor.id, Product.name == item.name)
-        )
-        product = result.scalar_one_or_none()
-        if product is None:
-            product = Product(competitor_id=competitor.id, sku=item.sku, name=item.name, url=url)
-            session.add(product)
+    for page_num in range(1, MAX_PAGES_PER_CATALOG_URL + 1):
+        page_url = _paginated_url(url, page_num)
+        page_text = await fetch_page_text(page_url)
+        extracted = await extract_products(page_text)
 
-        session.add(
-            PriceObservation(
-                price=item.price,
-                currency=item.currency,
-                in_stock=item.in_stock,
-                promo_text=item.promo_text,
-                source="scheduled_crawl",
-                product=product,
+        new_items = [item for item in extracted.products if item.name not in seen_names]
+        if not new_items:
+            break
+
+        for item in new_items:
+            seen_names.add(item.name)
+            result = await session.execute(
+                select(Product).where(Product.competitor_id == competitor.id, Product.name == item.name)
             )
-        )
+            product = result.scalar_one_or_none()
+            if product is None:
+                product = Product(competitor_id=competitor.id, sku=item.sku, name=item.name, url=page_url)
+                session.add(product)
 
-    await session.commit()
+            session.add(
+                PriceObservation(
+                    price=item.price,
+                    currency=item.currency,
+                    in_stock=item.in_stock,
+                    promo_text=item.promo_text,
+                    source="scheduled_crawl",
+                    product=product,
+                )
+            )
+
+        await session.commit()

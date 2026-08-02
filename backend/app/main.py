@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import competitors, prices, products
+from app.api import agent, competitors, prices, products, swot
 from app.core.config import get_settings, load_competitors_config
 
 app = FastAPI(title="Competitor Analysis API")
@@ -18,6 +18,8 @@ app.add_middleware(
 app.include_router(competitors.router)
 app.include_router(products.router)
 app.include_router(prices.router)
+app.include_router(agent.router)
+app.include_router(swot.router)
 
 
 @app.get("/health")

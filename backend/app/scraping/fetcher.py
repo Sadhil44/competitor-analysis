@@ -13,7 +13,14 @@ async def fetch_page_text(url: str) -> str:
         browser = await pw.chromium.launch(headless=True)
         try:
             page = await browser.new_page(user_agent=USER_AGENT)
-            await page.goto(url, wait_until="networkidle")
+            # "networkidle" waits for zero network connections for 500ms —
+            # fragile against sites with persistent background chatter (chat
+            # widgets, analytics beacons) that never fully go quiet, causing
+            # a hard timeout even though the actual page content is ready.
+            # "domcontentloaded" + a short fixed wait for JS-rendered content
+            # is the more robust standard pattern.
+            await page.goto(url, wait_until="domcontentloaded")
+            await page.wait_for_timeout(2000)
             return await page.inner_text("body")
         finally:
             await browser.close()

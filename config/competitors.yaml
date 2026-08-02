@@ -7,34 +7,92 @@
 # ever changes when you add/remove a competitor or adjust crawl targets.
 #
 # Loaded by backend/app/core/config.py at startup and on each scheduled run.
+#
+# Real competitors for Gardens Alive. Tracked category: perennials & flowering
+# plants, kept consistent across all competitors for apples-to-apples pricing
+# comparison and SWOT generation. Burpee (burpee.com) is deliberately excluded —
+# its perennials pages are behind DataDome bot-detection (HTTP 403 with a
+# challenge page), which is an explicit signal the site doesn't want automated
+# access. Circumventing that would cross from polite scraping into deliberately
+# defeating a site's anti-bot controls, so it's not attempted here. If Burpee
+# data is needed, it would have to come from a different source (a business/
+# affiliate data feed, manual spot-checks), not scraping.
+#
+# Note: `gurneys` below is OUR OWN storefront, not a competitor — deliberately
+# included here to reuse the same fetch/extract/store pipeline rather than
+# build a parallel schema. Downstream code (agent tools, dashboard) needs to
+# treat this one entry as "us," not "them." Tracked as "Gurney's" rather than
+# narrowly "Gardens Alive": Gardens Alive no longer runs its own storefront
+# (see notes below) and now operates as a sub-brand within Gurney's broader
+# catalog — Gurney's is the actual real-world storefront/brand to track.
 
 competitors:
-  - slug: greenleaf-gardens
-    name: "GreenLeaf Gardens (placeholder)"
-    website_url: "https://example.com/greenleaf-gardens"
+  - slug: fast-growing-trees
+    name: "Fast Growing Trees"
+    website_url: "https://www.fast-growing-trees.com"
     active: true
     notes: >
-      Placeholder competitor for local development. Replace website_url and
-      catalog_urls with a real competitor's public product/collection pages
-      before running the scraper against it.
+      Real competitor. Verified perennials category page loads correctly via
+      our fetcher (2026-07-25).
     crawl:
       # Cron expression (5-field, standard cron syntax) consumed by APScheduler.
       cadence_cron: "0 6 * * *"      # daily at 06:00
       rate_limit_seconds: 2           # minimum delay between requests to this domain
       catalog_urls:
-        - "https://example.com/greenleaf-gardens/collections/fertilizer"
-        - "https://example.com/greenleaf-gardens/collections/soil-amendments"
+        - "https://www.fast-growing-trees.com/collections/perennials"
 
-  - slug: bloomcraft-supply
-    name: "BloomCraft Supply (placeholder)"
-    website_url: "https://example.com/bloomcraft-supply"
+  - slug: holland-bulb-farms
+    name: "Holland Bulb Farms"
+    website_url: "https://www.hollandbulbfarms.com"
     active: true
     notes: >
-      Second placeholder competitor, kept intentionally distinct from
-      greenleaf-gardens so early pipeline code is proven against more than
-      one config entry before real targets are plugged in.
+      Real competitor. Verified perennials category page loads correctly via
+      our fetcher (2026-07-25).
     crawl:
       cadence_cron: "0 6 * * *"
       rate_limit_seconds: 2
       catalog_urls:
-        - "https://example.com/bloomcraft-supply/collections/pots-planters"
+        - "https://www.hollandbulbfarms.com/spring-planting-bulbs/perennials"
+
+  - slug: american-meadows
+    name: "American Meadows"
+    website_url: "https://www.americanmeadows.com"
+    active: true
+    notes: >
+      Real competitor. Verified perennials category page loads correctly via
+      our fetcher (2026-07-25) — required switching the fetcher's wait
+      strategy from networkidle to domcontentloaded due to this site's
+      persistent background network activity (chat widget, analytics).
+      Switched catalog_url (2026-08-02) from /category/perennials — a
+      curated, non-paginated landing page capped at 24 items — to
+      /collections/perennial-plants, the real underlying paginated
+      collection (confirmed via a pagination link found in the page HTML),
+      to get real depth via our multi-page ingest.
+    crawl:
+      cadence_cron: "0 6 * * *"
+      rate_limit_seconds: 2
+      catalog_urls:
+        - "https://www.americanmeadows.com/collections/perennial-plants"
+
+  - slug: gurneys
+    name: "Gurney's (parent brand of Gardens Alive — us)"
+    website_url: "https://www.gurneys.com"
+    active: true
+    notes: >
+      NOT a competitor — this is our own storefront. gardensalive.com's SSL
+      certificate has expired (ERR_CERT_DATE_INVALID as of 2026-07-25) and
+      the brand no longer runs independently; Gardens Alive now operates as
+      a sub-brand within Gurney's broader catalog (gurneys.com), so Gurney's
+      is tracked as the real "us" rather than a narrower Gardens-Alive-only
+      slice. The tracked catalog_url is Gurney's general perennials/bulbs/
+      flowers category — it mixes Gurney's-branded and Gardens-Alive-branded
+      SKUs together (not cleanly separable). Switched to the canonical
+      /collections/ URL (2026-08-02, found via the page's <link rel=
+      canonical>) — confirmed via page 2 being nearly empty that this
+      category's true catalog really is only ~30-34 products, not a
+      truncation artifact like American Meadows was.
+    crawl:
+      cadence_cron: "0 6 * * *"
+      rate_limit_seconds: 2
+      catalog_urls:
+        - "https://www.gurneys.com/collections/all-perennials-bulbs-and-flowers"

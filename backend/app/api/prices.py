@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -29,7 +29,7 @@ async def get_product_price_trend(
     if product is None:
         raise HTTPException(status_code=404, detail=f"No product with id {product_id}")
 
-    since = datetime.utcnow() - timedelta(days=days)
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
     result = await db.execute(
         select(PriceObservation)
         .where(PriceObservation.product_id == product_id, PriceObservation.observed_at >= since)
