@@ -9,7 +9,7 @@ class PriceObservationRead(BaseModel):
 
     id: int
     product_id: int
-    price: Decimal
+    price: Decimal | None
     currency: str
     in_stock: bool
     promo_text: str

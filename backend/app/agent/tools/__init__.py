@@ -50,7 +50,7 @@ async def query_price_history(args: dict) -> dict:
         return {"content": [{"type": "text", "text": "No matching price history found."}]}
 
     lines = [
-        f"{product.name}: {obs.price} {obs.currency} "
+        f"{product.name}: {f'{obs.price} {obs.currency}' if obs.price is not None else 'no price shown'} "
         f"({'in stock' if obs.in_stock else 'out of stock'}) at {obs.observed_at.isoformat()}"
         for product, obs in rows
     ]

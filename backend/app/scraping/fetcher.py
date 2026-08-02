@@ -1,10 +1,37 @@
+from dataclasses import dataclass
+
 from playwright.async_api import async_playwright
 
 USER_AGENT = "CompetitorAnalysisBot/0.1 (contact: you@example.com)"
 
+# Reads whatever pagination signal the page itself declares — <link rel="next">,
+# <a rel="next">, or a visibly-labeled "Next" link — instead of assuming a URL
+# convention like Shopify's `?page=N`. `.href` on a DOM element is always the
+# browser-resolved absolute URL, so this works whether the site uses relative
+# or absolute hrefs without us having to resolve anything ourselves.
+_FIND_NEXT_LINK_JS = """
+() => {
+    const relNext = document.querySelector('link[rel="next"], a[rel="next"]');
+    if (relNext && relNext.href) return relNext.href;
+    const textNext = Array.from(document.querySelectorAll('a')).find((a) => {
+        const label = (a.textContent || '').trim().toLowerCase();
+        const aria = (a.getAttribute('aria-label') || '').toLowerCase();
+        return label === 'next' || label === 'next page' || aria.includes('next page') || aria === 'next';
+    });
+    return textNext ? textNext.href : null;
+}
+"""
 
-async def fetch_page_text(url: str) -> str:
-    """Render a page with a real browser and return its visible text.
+
+@dataclass
+class FetchedPage:
+    text: str
+    next_page_url: str | None
+
+
+async def fetch_page(url: str) -> FetchedPage:
+    """Render a page with a real browser; return its visible text and the
+    URL of the next page, if the page declares one.
 
     Uses Playwright (not a plain HTTP request) because competitor product
     pages typically render price/stock via JavaScript after initial load.
@@ -21,6 +48,8 @@ async def fetch_page_text(url: str) -> str:
             # is the more robust standard pattern.
             await page.goto(url, wait_until="domcontentloaded")
             await page.wait_for_timeout(2000)
-            return await page.inner_text("body")
+            text = await page.inner_text("body")
+            next_page_url = await page.evaluate(_FIND_NEXT_LINK_JS)
+            return FetchedPage(text=text, next_page_url=next_page_url)
         finally:
             await browser.close()

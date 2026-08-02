@@ -44,9 +44,12 @@ async def get_product_price_trend(
         latest_price = observations[-1].price
         if len(observations) >= 2:
             previous_price = observations[-2].price
-            price_change = latest_price - previous_price
-            if previous_price != 0:
-                price_change_pct = float(price_change / previous_price * 100)
+            # Either side can be None (no price shown while out of stock) —
+            # nothing to diff in that case.
+            if latest_price is not None and previous_price is not None:
+                price_change = latest_price - previous_price
+                if previous_price != 0:
+                    price_change_pct = float(price_change / previous_price * 100)
 
     return PriceTrend(
         product_id=product.id,

@@ -21,7 +21,9 @@ class PriceObservation(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
-    price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    # Nullable: some listings show no price at all for out-of-stock/"notify
+    # me" items — there's nothing to round-trip through Decimal in that case.
+    price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     currency: Mapped[str] = mapped_column(String(3))
     in_stock: Mapped[bool] = mapped_column()
     promo_text: Mapped[str] = mapped_column(Text, default="")

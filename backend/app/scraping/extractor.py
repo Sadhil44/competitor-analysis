@@ -1,6 +1,8 @@
+import asyncio
+
 from anthropic import AsyncAnthropic
 
-from app.schemas.extraction import ExtractedProductList
+from app.schemas.extraction import ExtractedProduct, ExtractedProductList
 
 client = AsyncAnthropic()
 
@@ -41,6 +43,8 @@ async def extract_products(page_text: str) -> ExtractedProductList:
                     "Some listings show a current/sale price alongside a crossed-out "
                     "original price (e.g. '$17.98 Was: $44.95') — extract the "
                     "current/sale price ($17.98), not the original.\n\n"
+                    "Some out-of-stock or 'notify me' listings show no price at all — "
+                    "set price to null in that case rather than guessing a number.\n\n"
                     "Page content:\n\n" + page_text
                 ),
             }
@@ -48,3 +52,28 @@ async def extract_products(page_text: str) -> ExtractedProductList:
         output_format=ExtractedProductList,
     )
     return response.parsed_output
+
+
+EXTRACTION_PASSES = 2
+
+
+async def extract_products_merged(page_text: str, passes: int = EXTRACTION_PASSES) -> ExtractedProductList:
+    """Run extract_products multiple times over the same page and merge by
+    product name, taking the union.
+
+    A single call over a long, dense page isn't fully exhaustive or
+    deterministic — repeated calls on identical input have been observed to
+    vary more than 2x in how many products they capture (52 to 112 products
+    from the same Holland Bulb Farms page across separate calls). Multiple
+    passes catch items any single pass missed; where a name is captured by
+    more than one pass, prefer whichever result has a non-null price.
+    """
+    results = await asyncio.gather(*[extract_products(page_text) for _ in range(passes)])
+
+    merged: dict[str, ExtractedProduct] = {}
+    for result in results:
+        for item in result.products:
+            existing = merged.get(item.name)
+            if existing is None or (existing.price is None and item.price is not None):
+                merged[item.name] = item
+    return ExtractedProductList(products=list(merged.values()))

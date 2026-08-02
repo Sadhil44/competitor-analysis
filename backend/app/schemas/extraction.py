@@ -6,7 +6,7 @@ from pydantic import BaseModel
 class ExtractedProduct(BaseModel):
     sku: str | None = None
     name: str
-    price: Decimal
+    price: Decimal | None = None
     currency: str
     in_stock: bool
     promo_text: str = ""
