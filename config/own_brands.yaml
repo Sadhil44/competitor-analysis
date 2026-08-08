@@ -1,0 +1,66 @@
+# Our own brands — the first-party pricing feed (a CSV export from our
+# internal systems, see app/scraping/feed_import.py) is keyed by a numeric
+# brand code that means nothing on its own. This file is the single source
+# of truth mapping that code to a real brand identity, the same role
+# config/competitors.yaml plays for scrape targets.
+#
+# These rows are NOT scraped — `crawl` config (cadence, catalog_urls) simply
+# doesn't apply here, unlike competitors.yaml. website_url is informational
+# only; it's left blank for entries that are sales/fulfillment channels
+# rather than independent storefronts.
+#
+# `gurneys` deliberately reuses the same slug as the scraped "Gurney's"
+# competitor row in competitors.yaml — brand_num 5 in the feed and that
+# scraped storefront are the same real brand, just two different data
+# sources (source="internal_feed" vs source="scheduled_crawl" on
+# PriceObservation). seed_own_brands() matches by slug first, so this
+# updates that existing row (setting is_own_brand/brand_num) instead of
+# creating a duplicate competitor.
+
+own_brands:
+  - brand_num: 4
+    slug: "spring-hill-nurseries"
+    name: "Spring Hill Nurseries"
+    website_url: "https://www.springhillnursery.com"
+
+  - brand_num: 5
+    slug: "gurneys"
+    name: "Gurney's Seed & Nursery Company"
+    website_url: "https://www.gurneys.com"
+
+  - brand_num: 7
+    slug: "brecks"
+    name: "Breck's"
+    website_url: "https://www.brecks.com"
+
+  - brand_num: 36
+    slug: "k-van-bourgondien"
+    name: "K. van Bourgondien"
+    website_url: "https://www.dutchbulbs.com"
+    notes: >
+      Domain not independently re-verified when this entry was added
+      (2026-08-08) — confirm before relying on it for scraping.
+
+  - brand_num: 53
+    slug: "gardeners-supply"
+    name: "Gardener's Supply Company"
+    website_url: "https://www.gardeners.com"
+    notes: >
+      Direct/catalog/web business. See "gardeners-supply-retail" (brand_num
+      72) for the retail-store channel of the same brand.
+
+  - brand_num: 66
+    slug: "amazon-gardeners-fulfillment"
+    name: "Amazon Gardeners Fulfillment"
+    website_url: ""
+    notes: >
+      Amazon marketplace fulfillment channel, not an independent storefront
+      — no website_url to track.
+
+  - brand_num: 72
+    slug: "gardeners-supply-retail"
+    name: "Gardener's Supply Retail"
+    website_url: ""
+    notes: >
+      Retail-store restock channel for Gardener's Supply Company (brand_num
+      53), not an independent storefront — no website_url to track.

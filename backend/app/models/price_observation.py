@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Numeric, String, Text
+from sqlalchemy import ForeignKey, Index, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -18,6 +18,24 @@ class PriceObservation(Base):
     """
 
     __tablename__ = "price_observations"
+
+    # The first-party feed (source="internal_feed") derives observed_at from
+    # a season code rather than a real timestamp, so re-running the same
+    # import file would otherwise insert duplicate rows every time. This
+    # partial unique index makes that import idempotent via
+    # ON CONFLICT DO NOTHING (see app/scraping/feed_import.py) without
+    # constraining scraped rows, whose observed_at is a real high-resolution
+    # timestamp that's never expected to collide.
+    __table_args__ = (
+        Index(
+            "ix_price_observations_internal_feed_dedup",
+            "product_id",
+            "observed_at",
+            "source",
+            unique=True,
+            postgresql_where=text("source = 'internal_feed'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))

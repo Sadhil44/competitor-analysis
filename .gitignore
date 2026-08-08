@@ -9,6 +9,9 @@ backend/*.egg-info/
 backend/.pytest_cache/
 backend/.ruff_cache/
 
+# Local data dropped in for one-off import scripts (e.g. scripts/import_feed.py)
+backend/data/
+
 # Editors/OS
 .DS_Store
 Thumbs.db

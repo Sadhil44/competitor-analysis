@@ -25,6 +25,16 @@ class Competitor(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
+    # True for our own brands (Gurney's, Spring Hill Nurseries, Breck's, ...)
+    # as opposed to real competitors — same Product/PriceObservation shape,
+    # just a different provenance, so agent tools and the dashboard can
+    # filter "us" vs "them" without a parallel schema. `brand_num` is the
+    # internal brand code from the first-party pricing feed
+    # (config/own_brands.yaml / app/scraping/feed_import.py); null for
+    # competitors seeded from competitors.yaml.
+    is_own_brand: Mapped[bool] = mapped_column(default=False, server_default="false")
+    brand_num: Mapped[int | None] = mapped_column(unique=True, default=None)
+
     products: Mapped[list["Product"]] = relationship(back_populates="competitor")
     swot_analyses: Mapped[list["SWOTAnalysis"]] = relationship(back_populates="competitor")
     developments: Mapped[list["Development"]] = relationship(back_populates="competitor")

@@ -17,10 +17,17 @@ dependencies = [
     # Scraping
     "playwright>=1.49",
     # LLM-based structured extraction — via anthropic's native client.messages.parse(),
-    # not a separate library (see app/scraping/extractor.py)
-    "anthropic>=0.40",
-    # Agent orchestration
-    "claude-agent-sdk>=0.2.110",
+    # not a separate library (see app/scraping/extractor.py). Also used directly
+    # by the web_search tool (app/agent/tools/__init__.py) for the server-side
+    # web_search_20260209 tool, which LangChain/LangGraph don't wrap natively.
+    "anthropic>=0.60",
+    # Agent orchestration — LangGraph StateGraph replaces the earlier
+    # claude-agent-sdk orchestrator (see app/agent/orchestrator.py) as the more
+    # explicit, graph-based demonstration: routing is a plain conditional edge,
+    # and each subagent's tool access is enforced by the graph, not just prompt.
+    "langgraph>=0.6",
+    "langchain-anthropic>=0.3",
+    "langchain-core>=0.3.30",
     # Embeddings
     "voyageai>=0.3",
     # Scheduling

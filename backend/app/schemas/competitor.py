@@ -11,5 +11,7 @@ class CompetitorRead(BaseModel):
     name: str
     website_url: str
     notes: str
+    is_own_brand: bool
+    brand_num: int | None
     created_at: datetime
 

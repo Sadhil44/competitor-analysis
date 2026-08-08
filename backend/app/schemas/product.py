@@ -10,6 +10,7 @@ class ProductRead(BaseModel):
     competitor_id: int
     sku: str | None
     name: str
+    grade: str | None
     category: str
     url: str
     first_seen_at: datetime

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     voyage_api_key: str = ""
     competitors_config_path: Path = Path("/config/competitors.yaml")
+    own_brands_config_path: Path = Path("/config/own_brands.yaml")
     environment: str = "development"
 
 
@@ -61,3 +62,27 @@ def load_competitors_config(path: Path | None = None) -> list[CompetitorConfig]:
     raw = yaml.safe_load(resolved_path.read_text())
     parsed = CompetitorsFile.model_validate(raw)
     return [c for c in parsed.competitors if c.active]
+
+
+class OwnBrandConfig(BaseModel):
+    brand_num: int
+    slug: str
+    name: str
+    website_url: str = ""
+    notes: str = ""
+
+
+class OwnBrandsFile(BaseModel):
+    own_brands: list[OwnBrandConfig]
+
+
+@lru_cache
+def load_own_brands_config(path: Path | None = None) -> list[OwnBrandConfig]:
+    """Read and validate config/own_brands.yaml — the brand_num -> identity
+    mapping for the first-party pricing feed (app/scraping/feed_import.py).
+    Mirrors load_competitors_config's caching behavior.
+    """
+    resolved_path = path or get_settings().own_brands_config_path
+    raw = yaml.safe_load(resolved_path.read_text())
+    parsed = OwnBrandsFile.model_validate(raw)
+    return parsed.own_brands

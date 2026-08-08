@@ -1,60 +1,103 @@
-from claude_agent_sdk import ClaudeAgentOptions, query
+"""LangGraph orchestrator: classifies a question, routes it to the general
+Q&A agent or to the swot/developments subagent, then returns the final
+answer text.
 
-from app.agent.subagents import DEVELOPMENTS_AGENT, SWOT_AGENT
-from app.agent.tools import competitor_analysis_server
+Replaces the earlier Claude Agent SDK orchestrator (which used `query()` +
+implicit Agent-tool delegation) with an explicit LangGraph StateGraph —
+chosen as the more demonstrative pattern for graph-based agent
+orchestration: routing here is a plain conditional edge you can read and
+trace, rather than a delegation decision buried in the model's own tool
+calls. Each subagent (app/agent/subagents/__init__.py) is itself a
+LangGraph-prebuilt ReAct agent, so the graph mixes hand-written control flow
+at the top level with framework-provided tool-calling loops underneath.
+"""
 
-ORCHESTRATOR_MODEL = "claude-sonnet-5"
+from typing import Literal, TypedDict
 
-SYSTEM_PROMPT = """You are a competitor analysis assistant for Gardens Alive, a horticultural company.
-You answer questions about competitors' pricing history and recent developments, grounded in recorded data.
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel
 
-IMPORTANT: our own company's data is tracked in the same system as competitors, under the slug
-"gurneys" (Gardens Alive operates as a brand within Gurney's, our storefront). When asked about
-"our" pricing, "our own" products, Gardens Alive's pricing, or comparisons involving "us", use
-query_price_history and search_developments with competitor="gurneys" — the exact same tools you'd
-use for any competitor. Do not say you lack access to our own data; it is queried the same way.
+from app.agent.subagents import DEVELOPMENTS_AGENT, GENERAL_AGENT, SWOT_AGENT
 
-Use query_price_history and search_developments to check what's already known before answering.
-For requests that ask you to analyze a competitor's SWOT, delegate to the swot_agent subagent.
-For requests about recent news or developments, delegate to the developments_agent subagent.
-Always cite the specific data (prices, dates, sources) that ground your answer — never answer from general knowledge alone when competitor-specific data is being asked about.
-When you invoke a subagent via the Agent tool, always set run_in_background to false — you need its result (and its side effects, like saving records) to complete before you can respond to the user."""
+ROUTER_MODEL = "claude-haiku-4-5"
+
+ROUTER_SYSTEM_PROMPT = """Classify what a competitor-analysis question is asking for:
+- "swot": asks for a SWOT analysis (strengths/weaknesses/opportunities/threats) of a competitor.
+- "developments": asks what's new/recent with a competitor — news, launches, promos.
+- "general": anything else — price history questions, comparisons, general Q&A grounded in recorded data.
+
+Our own company's data is tracked under the slug "gurneys" — treat "us"/"our own"/"Gardens Alive" questions
+about pricing or developments the same as any competitor question, still routed by what's being asked for."""
+
+
+class RouteDecision(BaseModel):
+    route: Literal["swot", "developments", "general"]
+
+
+class OrchestratorState(TypedDict, total=False):
+    messages: list[BaseMessage]
+    route: Literal["swot", "developments", "general"]
+    answer: str
+
+
+# Haiku, low max_tokens: this call only ever produces one small structured
+# tool call (the route field), not a reasoned response.
+_router_model = ChatAnthropic(model=ROUTER_MODEL, max_tokens=64).with_structured_output(RouteDecision)
+
+
+async def classify(state: OrchestratorState) -> dict:
+    question = state["messages"][-1].content
+    decision: RouteDecision = await _router_model.ainvoke(
+        [
+            {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
+            {"role": "user", "content": question},
+        ]
+    )
+    return {"route": decision.route}
+
+
+def _route_selector(state: OrchestratorState) -> str:
+    return state["route"]
+
+
+async def _run_subagent(agent, state: OrchestratorState) -> dict:
+    result = await agent.ainvoke({"messages": state["messages"]})
+    final_message = result["messages"][-1]
+    return {"messages": result["messages"], "answer": final_message.content}
+
+
+async def run_general(state: OrchestratorState) -> dict:
+    return await _run_subagent(GENERAL_AGENT, state)
+
+
+async def run_swot(state: OrchestratorState) -> dict:
+    return await _run_subagent(SWOT_AGENT, state)
+
+
+async def run_developments(state: OrchestratorState) -> dict:
+    return await _run_subagent(DEVELOPMENTS_AGENT, state)
+
+
+_builder = StateGraph(OrchestratorState)
+_builder.add_node("classify", classify)
+_builder.add_node("general", run_general)
+_builder.add_node("swot", run_swot)
+_builder.add_node("developments", run_developments)
+_builder.add_edge(START, "classify")
+_builder.add_conditional_edges(
+    "classify",
+    _route_selector,
+    {"general": "general", "swot": "swot", "developments": "developments"},
+)
+_builder.add_edge("general", END)
+_builder.add_edge("swot", END)
+_builder.add_edge("developments", END)
+
+orchestrator_graph = _builder.compile()
 
 
 async def ask_agent(question: str) -> str:
-    # permission_mode="dontAsk" pairs with allowed_tools for a fully headless
-    # agent: listed tools are auto-approved, everything else is denied
-    # outright — no interactive canUseTool callback, since nobody's watching
-    # to click "approve" on a backend API call. Without this, tool calls
-    # (including the subagents' save_* calls) silently get denied.
-    #
-    # Note: save_swot_analysis/save_development are only meant to be called
-    # by their respective subagents (see subagents.py's per-agent `tools`
-    # lists), not the orchestrator directly — but permission approval is
-    # session-wide, not per-agent, so they're listed here too or the
-    # subagents' calls would be denied the same way this whole fix addresses.
-    # The orchestrator's own restraint from calling them directly is enforced
-    # by its system prompt, not by tool visibility.
-    options = ClaudeAgentOptions(
-        system_prompt=SYSTEM_PROMPT,
-        mcp_servers={"competitor_analysis": competitor_analysis_server},
-        permission_mode="dontAsk",
-        allowed_tools=[
-            "mcp__competitor_analysis__query_price_history",
-            "mcp__competitor_analysis__search_developments",
-            "mcp__competitor_analysis__save_swot_analysis",
-            "mcp__competitor_analysis__save_development",
-            "WebSearch",
-            "WebFetch",
-            "Agent",
-        ],
-        agents={"swot_agent": SWOT_AGENT, "developments_agent": DEVELOPMENTS_AGENT},
-        model=ORCHESTRATOR_MODEL,
-    )
-
-    result_text = ""
-    async for message in query(prompt=question, options=options):
-        if hasattr(message, "result"):
-            result_text = message.result
-
-    return result_text
+    result = await orchestrator_graph.ainvoke({"messages": [HumanMessage(content=question)]})
+    return result["answer"]
