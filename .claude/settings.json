@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp \"C:\\\\Users\\\\sadhi\\\\Downloads\\\\Results.csv\" \"c:\\\\Users\\\\sadhi\\\\OneDrive\\\\Documents\\\\GitHub\\\\competitor-analysis\\\\backend\\\\data\\\\products.csv\" && ls -la \"c:\\\\Users\\\\sadhi\\\\OneDrive\\\\Documents\\\\GitHub\\\\competitor-analysis\\\\backend\\\\data\\\\\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\sadhi\\Downloads"
+    ]
+  }
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  }
+}

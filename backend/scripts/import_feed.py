@@ -3,9 +3,12 @@
 Run inside the backend container (it needs DATABASE_URL/config exactly like
 the app does), with the CSV placed somewhere under backend/ so the existing
 `./backend:/app` docker-compose volume mount makes it visible — e.g.
-backend/data/products.csv (backend/data/ is gitignored):
+backend/data/products.csv (backend/data/ is gitignored).
 
-    docker compose exec backend python scripts/import_feed.py data/products.csv
+Invoke with `-m`, not as a bare script — running `python scripts/import_feed.py`
+puts scripts/ (not /app) on sys.path, so the `app` package import fails:
+
+    docker compose exec backend python -m scripts.import_feed data/products.csv
 """
 
 import asyncio
@@ -24,7 +27,7 @@ async def main(csv_path: Path) -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        raise SystemExit(f"Usage: python {sys.argv[0]} <path-to-feed.csv>")
+        raise SystemExit("Usage: python -m scripts.import_feed <path-to-feed.csv>")
     path = Path(sys.argv[1])
     if not path.is_file():
         raise SystemExit(f"No such file: {path}")

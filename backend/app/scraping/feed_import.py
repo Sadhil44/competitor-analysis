@@ -32,7 +32,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +41,10 @@ from app.models import Competitor, PriceObservation, Product
 
 FEED_SOURCE = "internal_feed"
 FEED_CURRENCY = "USD"
-IMPORT_BATCH_SIZE = 5000
+# asyncpg hard-caps a single prepared statement at 32767 bound parameters.
+# Each PriceObservation row binds 7 params, so 5000 rows/batch (35000 params)
+# blew past that; 2000 rows (14000 params) leaves real headroom.
+IMPORT_BATCH_SIZE = 2000
 
 _SEASON_RE = re.compile(r"^([FS])(\d{2})$", re.IGNORECASE)
 
@@ -132,7 +135,18 @@ async def import_product_feed(session: AsyncSession, csv_path: Path) -> None:
     )
     competitor_id_by_brand_num: dict[int, int] = dict(result.all())
 
-    product_id_cache: dict[tuple[int, str], int] = {}
+    # Pre-populate from products already in the DB (from this competitor set)
+    # — without this, a second run (or a run picking up after an earlier one)
+    # can't tell an existing product from a new one and creates duplicates.
+    existing = await session.execute(
+        select(Product.competitor_id, Product.sku, Product.id).where(
+            Product.competitor_id.in_(competitor_id_by_brand_num.values()),
+            Product.sku.is_not(None),
+        )
+    )
+    product_id_cache: dict[tuple[int, str], int] = {
+        (competitor_id, sku): product_id for competitor_id, sku, product_id in existing
+    }
 
     batch: list[FeedRow] = []
     with open(csv_path, newline="", encoding="utf-8") as f:
@@ -199,7 +213,13 @@ async def _import_batch(
     stmt = pg_insert(PriceObservation).values(observation_rows)
     stmt = stmt.on_conflict_do_nothing(
         index_elements=["product_id", "observed_at", "source"],
-        index_where=PriceObservation.__table__.c.source == FEED_SOURCE,
+        # Must be a literal, not a bound parameter — Postgres matches a
+        # partial index's ON CONFLICT inference predicate by expression
+        # structure, and a bind param never structurally matches the
+        # literal `source = 'internal_feed'` predicate the index was
+        # created with (see the migration), even though the values agree
+        # at runtime.
+        index_where=text(f"source = '{FEED_SOURCE}'"),
     )
     await session.execute(stmt)
     await session.commit()

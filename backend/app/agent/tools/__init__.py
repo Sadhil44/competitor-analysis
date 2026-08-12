@@ -169,7 +169,16 @@ async def web_search(query: str) -> str:
     response = await _anthropic_client.messages.create(
         model=SEARCH_MODEL,
         max_tokens=1024,
-        tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}],
+        # allowed_callers must be explicit — Haiku 4.5 doesn't support the
+        # programmatic-tool-calling caller the API otherwise defaults to.
+        tools=[
+            {
+                "type": "web_search_20260209",
+                "name": "web_search",
+                "max_uses": 3,
+                "allowed_callers": ["direct"],
+            }
+        ],
         messages=[{"role": "user", "content": query}],
     )
 
