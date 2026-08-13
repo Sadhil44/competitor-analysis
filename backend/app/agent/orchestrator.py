@@ -62,10 +62,25 @@ def _route_selector(state: OrchestratorState) -> str:
     return state["route"]
 
 
+def _extract_text(content: str | list) -> str:
+    """AIMessage.content is a plain string only when the model didn't think.
+    claude-sonnet-5 runs adaptive thinking by default, so it's normally a
+    list of content blocks (thinking + text) instead — pull out just the
+    text blocks.
+    """
+    if isinstance(content, str):
+        return content
+    return "".join(
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
 async def _run_subagent(agent, state: OrchestratorState) -> dict:
     result = await agent.ainvoke({"messages": state["messages"]})
     final_message = result["messages"][-1]
-    return {"messages": result["messages"], "answer": final_message.content}
+    return {"messages": result["messages"], "answer": _extract_text(final_message.content)}
 
 
 async def run_general(state: OrchestratorState) -> dict:
