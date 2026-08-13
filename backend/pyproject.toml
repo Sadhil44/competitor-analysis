@@ -48,6 +48,19 @@ dev = [
 line-length = 100
 target-version = "py312"
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# The app's engine (app/db/session.py) is a module-level singleton whose
+# asyncpg connection pool binds to whichever event loop is running the
+# first time it's actually used. pytest-asyncio's default is a fresh event
+# loop per test function, which fragments that pool across loops and
+# surfaces as asyncpg errors ("another operation is in progress") on any
+# test after the first. Pinning both scopes to "session" keeps every test
+# on the one loop the engine's pool was created in.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

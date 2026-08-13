@@ -10,7 +10,10 @@ RUN pip install --no-cache-dir uv
 WORKDIR /app
 
 COPY pyproject.toml ./
-RUN uv pip install --system --no-cache -e .
+# --group dev pulls in pytest/pytest-asyncio/httpx/ruff too — this image
+# also runs the test suite (docker compose exec backend pytest), and
+# there's no separate CI/test image at this project's scale.
+RUN uv pip install --system --no-cache -e . --group dev
 RUN playwright install --with-deps chromium
 
 COPY . .
