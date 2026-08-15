@@ -1,6 +1,9 @@
 # Root-level secrets
 .env
 
+# Claude Code local settings/permissions — machine-specific, not shared
+.claude/
+
 # Python (backend)
 backend/__pycache__/
 backend/**/__pycache__/
