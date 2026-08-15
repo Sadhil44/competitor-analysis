@@ -40,7 +40,13 @@ services:
     command: sh -c "npm install && npx next dev -H 0.0.0.0"
     env_file: .env
     environment:
+      # Browser-side fetches (the ask-agent page) leave the Docker network
+      # entirely, so they need the host-mapped port.
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      # Server Components run inside this container, so "localhost" would
+      # mean the frontend container itself, not backend — use the compose
+      # service name instead.
+      INTERNAL_API_URL: http://backend:8000
     depends_on:
       - backend
     ports:
