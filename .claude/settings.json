@@ -7,7 +7,8 @@
   "permissions": {
     "allow": [
       "Bash(cp \"C:\\\\Users\\\\sadhi\\\\Downloads\\\\Results.csv\" \"c:\\\\Users\\\\sadhi\\\\OneDrive\\\\Documents\\\\GitHub\\\\competitor-analysis\\\\backend\\\\data\\\\products.csv\" && ls -la \"c:\\\\Users\\\\sadhi\\\\OneDrive\\\\Documents\\\\GitHub\\\\competitor-analysis\\\\backend\\\\data\\\\\")",
-      "Bash(curl -s -X POST \"http://localhost:8000/agent/ask\" -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"What is new with Holland Bulb Farms recently? Any developments I should know about?\\\\\"}\" --max-time 120)"
+      "Bash(curl -s -X POST \"http://localhost:8000/agent/ask\" -H \"Content-Type: application/json\" -d \"{\\\\\"question\\\\\": \\\\\"What is new with Holland Bulb Farms recently? Any developments I should know about?\\\\\"}\" --max-time 120)",
+      "Bash(curl -s \"http://localhost:8000/products/124449/prices?days=3650\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\sadhi\\Downloads"
