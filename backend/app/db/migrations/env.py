@@ -15,7 +15,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from app.core.config import get_settings
 from app.db.base import Base
 
-from app.models import Competitor, Product, PriceObservation, SWOTAnalysis, Development, CrawlRun  # noqa: F401
+from app.models import (  # noqa: F401
+    Competitor,
+    Product,
+    PriceObservation,
+    SWOTAnalysis,
+    Development,
+    Campaign,
+    CrawlRun,
+)
 
 config = context.config
 

@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from app.agent.embeddings import embed_text
 from app.db.session import async_session_factory
-from app.models import Competitor, Development, PriceObservation, Product, SWOTAnalysis
+from app.models import Campaign, Competitor, Development, PriceObservation, Product, SWOTAnalysis
 
 SAVE_MODEL = "claude-sonnet-5"
 # Haiku tier for web_search: this tool makes its own nested LLM call purely to
@@ -38,7 +38,9 @@ async def query_price_history(competitor: str, product_query: str, days: int) ->
     """Look up recorded price history for a tracked company's products,
     optionally filtered by product name and time range. Works for real
     competitors AND for our own company (slug 'gurneys') — both are tracked
-    the same way; pass competitor='gurneys' for our own pricing.
+    the same way; pass competitor='gurneys' for our own pricing. Each line
+    is prefixed with [product_id=N] — pass that id to save_campaign if you
+    later save a promotion tied to one of these specific products.
     """
     async with async_session_factory() as session:
         competitor_row = await _find_competitor(session, competitor)
@@ -62,7 +64,8 @@ async def query_price_history(competitor: str, product_query: str, days: int) ->
         return "No matching price history found."
 
     lines = [
-        f"{product.name}: {f'{obs.price} {obs.currency}' if obs.price is not None else 'no price shown'} "
+        f"[product_id={product.id}] {product.name}: "
+        f"{f'{obs.price} {obs.currency}' if obs.price is not None else 'no price shown'} "
         f"({'in stock' if obs.in_stock else 'out of stock'}) at {obs.observed_at.isoformat()}"
         for product, obs in rows
     ]
@@ -71,10 +74,12 @@ async def query_price_history(competitor: str, product_query: str, days: int) ->
 
 @tool
 async def search_developments(competitor: str, query: str, top_k: int) -> str:
-    """Semantically search a tracked company's recorded developments (news,
-    launches, promos, funding, leadership changes) by meaning, not just
-    keywords. Works for real competitors AND for our own company (slug
-    'gurneys') — pass competitor='gurneys' for our own developments.
+    """Semantically search a tracked company's recorded strategic/
+    organizational developments (launches, funding, leadership changes,
+    major assortment shifts) by meaning, not just keywords. Does NOT
+    include promotions/sales — use search_campaigns for those. Works for
+    real competitors AND for our own company (slug 'gurneys') — pass
+    competitor='gurneys' for our own developments.
     """
     async with async_session_factory() as session:
         competitor_row = await _find_competitor(session, competitor)
@@ -134,9 +139,11 @@ async def save_swot_analysis(
 async def save_development(
     competitor: str, title: str, summary: str, url: str, category: str, event_date: str
 ) -> str:
-    """Persist a newly discovered competitor development (news, launch,
-    promo, funding, leadership change, or other). event_date is ISO format
-    (e.g. 2026-07-01).
+    """Persist a newly discovered STRATEGIC/organizational competitor
+    development — category is one of: launch, funding, leadership,
+    assortment_change, pr, other. Do NOT use this for sales/discounts/
+    promotions — call save_campaign for those instead. event_date is ISO
+    format (e.g. 2026-07-01).
     """
     async with async_session_factory() as session:
         competitor_row = await _find_competitor(session, competitor)
@@ -158,6 +165,81 @@ async def save_development(
         await session.commit()
 
     return "Development saved."
+
+
+@tool
+async def search_campaigns(competitor: str, product_query: str = "") -> str:
+    """List recorded promotional campaigns (sales, discounts, marketing
+    pushes) for a tracked company, optionally filtered by product name.
+    Works for real competitors AND for our own company (slug 'gurneys').
+    Check this before calling save_campaign so you don't record a
+    duplicate.
+    """
+    async with async_session_factory() as session:
+        competitor_row = await _find_competitor(session, competitor)
+        if competitor_row is None:
+            return f"No competitor with slug {competitor!r}"
+
+        stmt = select(Campaign).where(Campaign.competitor_id == competitor_row.id)
+        if product_query:
+            stmt = stmt.join(Product, Product.id == Campaign.product_id, isouter=True).where(
+                Product.name.ilike(f"%{product_query}%")
+            )
+        stmt = stmt.order_by(Campaign.discovered_at.desc()).limit(20)
+        campaign_rows = (await session.execute(stmt)).scalars().all()
+
+    if not campaign_rows:
+        return "No matching campaigns found."
+
+    lines = []
+    for c in campaign_rows:
+        window = ""
+        if c.starts_at or c.ends_at:
+            start = c.starts_at.date().isoformat() if c.starts_at else "?"
+            end = c.ends_at.date().isoformat() if c.ends_at else "?"
+            window = f" ({start} to {end})"
+        lines.append(f"{c.title} — {c.discount_text}{window}: {c.description}")
+    return "\n".join(lines)
+
+
+@tool
+async def save_campaign(
+    competitor: str,
+    title: str,
+    description: str,
+    discount_text: str,
+    source_url: str,
+    product_id: int | None = None,
+    starts_at: str | None = None,
+    ends_at: str | None = None,
+) -> str:
+    """Persist a discovered promotional campaign (a sale, discount, or
+    marketing push) for a competitor. Pass product_id (from
+    query_price_history's "[product_id=N]" prefix) when the campaign is
+    tied to one specific product; omit it for a competitor-wide/sitewide
+    promotion. starts_at/ends_at are ISO dates (e.g. 2026-09-01); omit
+    either if unknown.
+    """
+    async with async_session_factory() as session:
+        competitor_row = await _find_competitor(session, competitor)
+        if competitor_row is None:
+            return f"No competitor with slug {competitor!r}"
+
+        session.add(
+            Campaign(
+                competitor_id=competitor_row.id,
+                product_id=product_id,
+                title=title,
+                description=description,
+                discount_text=discount_text,
+                starts_at=datetime.fromisoformat(starts_at) if starts_at else None,
+                ends_at=datetime.fromisoformat(ends_at) if ends_at else None,
+                source_url=source_url,
+            )
+        )
+        await session.commit()
+
+    return "Campaign saved."
 
 
 @tool

@@ -38,4 +38,5 @@ class Competitor(Base):
     products: Mapped[list["Product"]] = relationship(back_populates="competitor")
     swot_analyses: Mapped[list["SWOTAnalysis"]] = relationship(back_populates="competitor")
     developments: Mapped[list["Development"]] = relationship(back_populates="competitor")
+    campaigns: Mapped[list["Campaign"]] = relationship(back_populates="competitor")
     crawl_runs: Mapped[list["CrawlRun"]] = relationship(back_populates="competitor")

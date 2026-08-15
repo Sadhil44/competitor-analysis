@@ -76,6 +76,29 @@ export interface Development {
   discovered_at: string;
 }
 
+export interface Campaign {
+  id: number;
+  competitor_id: number;
+  product_id: number | null;
+  title: string;
+  description: string;
+  discount_text: string;
+  starts_at: string | null;
+  ends_at: string | null;
+  source_url: string;
+  discovered_at: string;
+}
+
+export interface ComparableProduct {
+  id: number;
+  name: string;
+  competitor_id: number;
+  competitor_slug: string;
+  competitor_name: string;
+  latest_price: string | null;
+  currency: string | null;
+}
+
 // Every read here is live DB state (price data, agent output) — never
 // worth caching stale, and this version of Next doesn't cache fetch by
 // default anyway. cache: "no-store" just makes that explicit.
@@ -110,4 +133,16 @@ export async function getDevelopments(slug: string): Promise<Development[]> {
 
 export function getPriceTrend(productId: number, days = 3650): Promise<PriceTrend | null> {
   return apiFetch<PriceTrend>(`/products/${productId}/prices?days=${days}`);
+}
+
+export async function getCampaigns(slug: string): Promise<Campaign[]> {
+  return (await apiFetch<Campaign[]>(`/competitors/${slug}/campaigns`)) ?? [];
+}
+
+export async function getProductCampaigns(productId: number): Promise<Campaign[]> {
+  return (await apiFetch<Campaign[]>(`/products/${productId}/campaigns`)) ?? [];
+}
+
+export async function getComparableProducts(productId: number): Promise<ComparableProduct[]> {
+  return (await apiFetch<ComparableProduct[]>(`/products/${productId}/comparable`)) ?? [];
 }

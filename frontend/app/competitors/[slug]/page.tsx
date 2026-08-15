@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
+  Campaign,
   Development,
   Product,
   SWOTAnalysis,
+  getCampaigns,
   getCompetitor,
   getCompetitorProducts,
   getDevelopments,
@@ -20,10 +22,11 @@ export default async function CompetitorPage({
   const competitor = await getCompetitor(slug);
   if (!competitor) notFound();
 
-  const [products, swot, developments] = await Promise.all([
+  const [products, swot, developments, campaigns] = await Promise.all([
     getCompetitorProducts(slug),
     getLatestSWOT(slug),
     getDevelopments(slug),
+    getCampaigns(slug),
   ]);
 
   return (
@@ -55,6 +58,7 @@ export default async function CompetitorPage({
       </div>
 
       <SWOTPanel swot={swot} />
+      <CampaignsFeed campaigns={campaigns} />
       <DevelopmentsFeed developments={developments} />
       <ProductsTable slug={slug} products={products} />
     </div>
@@ -132,6 +136,62 @@ function DevelopmentsFeed({ developments }: { developments: Development[] }) {
               {d.url && (
                 <a
                   href={d.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-block text-xs text-sky-600 hover:underline dark:text-sky-400"
+                >
+                  Source
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function CampaignsFeed({ campaigns }: { campaigns: Campaign[] }) {
+  return (
+    <section>
+      <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
+        Campaigns &amp; promotions
+      </h2>
+      {campaigns.length === 0 ? (
+        <p className="text-sm text-zinc-500 dark:text-zinc-500">
+          No campaigns recorded yet — ask the agent what promotions this competitor is running.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-3">
+          {campaigns.map((c) => (
+            <li
+              key={c.id}
+              className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30"
+            >
+              <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-500">
+                {c.discount_text && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
+                    {c.discount_text}
+                  </span>
+                )}
+                {(c.starts_at || c.ends_at) && (
+                  <span>
+                    {c.starts_at ? new Date(c.starts_at).toLocaleDateString() : "?"}
+                    {" – "}
+                    {c.ends_at ? new Date(c.ends_at).toLocaleDateString() : "ongoing"}
+                  </span>
+                )}
+                {c.product_id && (
+                  <Link href={`/products/${c.product_id}`} className="hover:underline">
+                    View product
+                  </Link>
+                )}
+              </div>
+              <h3 className="mt-1 font-medium">{c.title}</h3>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{c.description}</p>
+              {c.source_url && (
+                <a
+                  href={c.source_url}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-1 inline-block text-xs text-sky-600 hover:underline dark:text-sky-400"

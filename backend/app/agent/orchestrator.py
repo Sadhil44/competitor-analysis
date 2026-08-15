@@ -25,7 +25,8 @@ ROUTER_MODEL = "claude-haiku-4-5"
 
 ROUTER_SYSTEM_PROMPT = """Classify what a competitor-analysis question is asking for:
 - "swot": asks for a SWOT analysis (strengths/weaknesses/opportunities/threats) of a competitor.
-- "developments": asks what's new/recent with a competitor — news, launches, promos.
+- "developments": asks what's new/recent with a competitor, including research requests — news, launches,
+  promotions/campaigns, funding, leadership changes.
 - "general": anything else — price history questions, comparisons, general Q&A grounded in recorded data.
 
 Our own company's data is tracked under the slug "gurneys" — treat "us"/"our own"/"Gardens Alive" questions
