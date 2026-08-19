@@ -54,6 +54,7 @@ async def get_product_price_trend(
     return PriceTrend(
         product_id=product.id,
         product_name=product.name,
+        product_url=product.url,
         observations=observations,
         latest_price=latest_price,
         price_change=price_change,

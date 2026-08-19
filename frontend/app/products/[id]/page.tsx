@@ -30,7 +30,22 @@ export default async function ProductPricePage({
     <div className="flex flex-col gap-8">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{trend.product_name}</h1>
-        <p className="text-sm text-zinc-500 dark:text-zinc-500">Price history</p>
+        <div className="mt-1 flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-500">
+          <span>Price history</span>
+          {trend.product_url && (
+            <>
+              <span aria-hidden>·</span>
+              <a
+                href={trend.product_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sky-600 hover:underline dark:text-sky-400"
+              >
+                View on site ↗
+              </a>
+            </>
+          )}
+        </div>
       </div>
       <PriceChart trend={trend} />
       <ProductCampaigns campaigns={campaigns} />
@@ -106,6 +121,17 @@ function ComparableProducts({ products }: { products: ComparableProduct[] }) {
                     <Link href={`/products/${p.id}`} className="hover:underline">
                       {p.name}
                     </Link>
+                    {p.url && (
+                      <a
+                        href={p.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="View on site"
+                        className="ml-1.5 text-zinc-400 hover:text-sky-600 dark:hover:text-sky-400"
+                      >
+                        ↗
+                      </a>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-zinc-500 dark:text-zinc-500">
                     <Link href={`/competitors/${p.competitor_slug}`} className="hover:underline">

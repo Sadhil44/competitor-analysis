@@ -47,6 +47,7 @@ export interface PriceObservation {
 export interface PriceTrend {
   product_id: number;
   product_name: string;
+  product_url: string;
   observations: PriceObservation[];
   latest_price: string | null;
   price_change: string | null;
@@ -92,6 +93,7 @@ export interface Campaign {
 export interface ComparableProduct {
   id: number;
   name: string;
+  url: string;
   competitor_id: number;
   competitor_slug: string;
   competitor_name: string;

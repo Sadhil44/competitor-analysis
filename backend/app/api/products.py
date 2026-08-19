@@ -99,6 +99,7 @@ async def get_comparable_products(
             ComparableProduct(
                 id=row.Product.id,
                 name=row.Product.name,
+                url=row.Product.url,
                 competitor_id=row.Competitor.id,
                 competitor_slug=row.Competitor.slug,
                 competitor_name=row.Competitor.name,

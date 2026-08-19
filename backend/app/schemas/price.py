@@ -20,6 +20,7 @@ class PriceObservationRead(BaseModel):
 class PriceTrend(BaseModel):
     product_id: int
     product_name: str
+    product_url: str
     observations: list[PriceObservationRead]
     latest_price: Decimal | None
     price_change: Decimal | None

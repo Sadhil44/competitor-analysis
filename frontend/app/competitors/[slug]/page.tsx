@@ -270,6 +270,17 @@ function ProductsTable({
                       <Link href={`/products/${p.id}`} className="hover:underline">
                         {p.name}
                       </Link>
+                      {p.url && (
+                        <a
+                          href={p.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="View on competitor's site"
+                          className="ml-1.5 text-zinc-400 hover:text-sky-600 dark:hover:text-sky-400"
+                        >
+                          ↗
+                        </a>
+                      )}
                     </td>
                     <td className="px-4 py-2 text-zinc-500 dark:text-zinc-500">{p.category || "—"}</td>
                     <td className="px-4 py-2 text-zinc-500 dark:text-zinc-500">{p.sku ?? "—"}</td>
