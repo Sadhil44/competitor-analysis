@@ -21,7 +21,7 @@ from sqlalchemy import delete, select
 
 from app.db.session import async_session_factory, get_db
 from app.main import app
-from app.models import Competitor, PriceObservation, Product
+from app.models import Campaign, Competitor, CrawlRun, PriceObservation, Product
 
 
 @pytest_asyncio.fixture
@@ -53,8 +53,8 @@ async def competitor_factory(db_session):
     """Creates one or more Competitor rows for a test, with a random
     slug/brand_num so runs never collide with each other or with real data
     (e.g. the real "gurneys" row), and deletes everything it created —
-    competitor, products, and their price observations, in FK-safe order —
-    once the test is done.
+    competitor, products, price observations, campaigns, and crawl runs, in
+    FK-safe order — once the test is done.
     """
     created_ids: list[int] = []
 
@@ -86,5 +86,7 @@ async def competitor_factory(db_session):
                 delete(PriceObservation).where(PriceObservation.product_id.in_(product_ids))
             )
             await db_session.execute(delete(Product).where(Product.id.in_(product_ids)))
+        await db_session.execute(delete(Campaign).where(Campaign.competitor_id.in_(created_ids)))
+        await db_session.execute(delete(CrawlRun).where(CrawlRun.competitor_id.in_(created_ids)))
         await db_session.execute(delete(Competitor).where(Competitor.id.in_(created_ids)))
         await db_session.commit()

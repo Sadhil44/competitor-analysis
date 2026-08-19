@@ -14,8 +14,13 @@ dependencies = [
     "alembic>=1.14",
     "asyncpg>=0.30",
     "pgvector>=0.3.6",
-    # Scraping
+    # Scraping — httpx for the cheap plain-HTTP fetch path (fetcher.py tries
+    # this before paying for a Playwright browser); beautifulsoup4 (stdlib
+    # html.parser backend, no lxml/C-extension needed) for deterministic
+    # HTML/JSON-LD parsing (discovery.py, extractor.py, campaigns.py).
     "playwright>=1.49",
+    "httpx>=0.28",
+    "beautifulsoup4>=4.12",
     # LLM-based structured extraction — via anthropic's native client.messages.parse(),
     # not a separate library (see app/scraping/extractor.py). Also used directly
     # by the web_search tool (app/agent/tools/__init__.py) for the server-side
@@ -40,7 +45,6 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
-    "httpx>=0.28",
     "ruff>=0.8",
 ]
 

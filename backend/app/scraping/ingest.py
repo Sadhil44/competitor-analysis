@@ -1,13 +1,22 @@
 import difflib
+import logging
 import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import load_competitors_config
-from app.models import Competitor, PriceObservation, Product
+from app.core.config import CompetitorConfig, load_competitors_config
+from app.models import Campaign, Competitor, CrawlRun, PriceObservation, Product
+from app.schemas.campaign import DetectedCampaign
+from app.schemas.extraction import ExtractedProduct
+from app.scraping.campaigns import discover_campaigns
+from app.scraping.discovery import discover_urls, extract_product_links
 from app.scraping.extractor import extract_products_merged
 from app.scraping.fetcher import fetch_page
+
+logger = logging.getLogger(__name__)
 
 
 async def seed_competitors(session: AsyncSession) -> None:
@@ -46,17 +55,152 @@ MAX_PAGES_PER_CATALOG_URL = 20  # safety cap only — the loop normally stops ea
 PRICE_CONTEXT_WINDOW = 40
 PRICE_CONTEXT_SIMILARITY_THRESHOLD = 0.5
 
+# Bounds on how much of a single crawl_competitor() run's discovered URLs
+# actually get fetched — discover_urls() already caps total discovery, but
+# a large sitemap can still hand back more category/product/promo URLs than
+# it's polite to fetch (and, for category URLs, each one is itself up to
+# MAX_PAGES_PER_CATALOG_URL further requests via ingest_page's pagination).
+# Tracking scope is a competitor's full catalog (not one category), so
+# these are generous rather than tight — still a real, finite bound (never
+# "unbounded"), just sized for thousands of products rather than a few
+# hundred.
+MAX_CATEGORY_URLS_PER_CRAWL = 50
+MAX_PRODUCT_URLS_PER_CRAWL = 5000
+MAX_PROMOTIONAL_URLS_PER_CRAWL = 15
+
 
 def _price_context_fingerprint(text: str) -> str:
     spans = (m.start() for m in re.finditer(re.escape("$"), text))
     return " ".join(text[max(0, s - PRICE_CONTEXT_WINDOW) : s + PRICE_CONTEXT_WINDOW] for s in spans)
 
 
-async def ingest_page(session: AsyncSession, competitor_slug: str, url: str) -> None:
+def _utcnow() -> datetime:
+    # Product/Campaign/CrawlRun timestamp columns are naive-UTC (see the
+    # migrations under app/db/migrations/versions) — matches the existing
+    # convention elsewhere in the app (e.g. app/api/prices.py) for producing
+    # a value that round-trips cleanly through them.
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+async def _find_or_create_product(
+    session: AsyncSession, competitor_id: int, item: ExtractedProduct, fallback_url: str
+) -> Product:
+    """Find-or-create keyed by (competitor_id, sku) when the item has a
+    sku — a stronger identity signal than name — falling back to the
+    existing (competitor_id, name) match (see app/models/product.py) when
+    it doesn't. Never both: a sku match short-circuits before the name
+    lookup runs, so a renamed listing with a stable sku doesn't get a
+    duplicate row.
+    """
+    product = None
+    if item.sku:
+        result = await session.execute(
+            select(Product).where(Product.competitor_id == competitor_id, Product.sku == item.sku)
+        )
+        product = result.scalar_one_or_none()
+    if product is None:
+        result = await session.execute(
+            select(Product).where(Product.competitor_id == competitor_id, Product.name == item.name)
+        )
+        product = result.scalar_one_or_none()
+
+    url = item.url or fallback_url
+    if product is None:
+        return Product(
+            competitor_id=competitor_id,
+            sku=item.sku,
+            name=item.name,
+            url=url,
+            category=item.category or "",
+        )
+
+    # Existing row: refresh what's mutable, fill in what was previously
+    # missing, never overwrite a real value with an absence.
+    product.last_seen_at = _utcnow()
+    if item.category:
+        product.category = item.category
+    if item.sku and not product.sku:
+        product.sku = item.sku
+    if url:
+        product.url = url
+    return product
+
+
+async def _persist_extracted_product(
+    session: AsyncSession, competitor_id: int, item: ExtractedProduct, page_url: str
+) -> Product:
+    product = await _find_or_create_product(session, competitor_id, item, page_url)
+    session.add(product)
+
+    promo_text = item.promo_text
+    if item.original_price is not None and item.original_price != item.price:
+        was_text = f"Was {item.currency} {item.original_price}"
+        promo_text = f"{promo_text}; {was_text}" if promo_text else was_text
+
+    session.add(
+        PriceObservation(
+            price=item.price,
+            currency=item.currency,
+            in_stock=item.in_stock,
+            promo_text=promo_text,
+            source="scheduled_crawl",
+            product=product,
+        )
+    )
+    return product
+
+
+async def _persist_campaign(
+    session: AsyncSession, competitor_id: int, detected: DetectedCampaign, product_id: int | None = None
+) -> bool:
+    """Returns True if a new Campaign row was inserted. Campaign is
+    append-only by design (see app/models/campaign.py) so promo history
+    over time is preserved, but that's for tracking a promotion's real
+    lifecycle — not for re-inserting the same still-running sitewide banner
+    every time a crawl happens to fetch the page it's on. Dedups on
+    (competitor, title, discount_text).
+    """
+    result = await session.execute(
+        select(Campaign.id).where(
+            Campaign.competitor_id == competitor_id,
+            Campaign.title == detected.title,
+            Campaign.discount_text == detected.discount_text,
+        )
+    )
+    if result.scalar_one_or_none() is not None:
+        return False
+
+    session.add(
+        Campaign(
+            competitor_id=competitor_id,
+            product_id=product_id,
+            title=detected.title,
+            description=detected.description,
+            discount_text=detected.discount_text,
+            source_url=detected.source_url,
+        )
+    )
+    return True
+
+
+@dataclass
+class IngestPageResult:
+    campaigns_found: int
+    # Product-detail links seen on the crawled page(s) — sourced from this
+    # one tracked category listing, not the site's full sitemap, so a
+    # caller can fetch individual product pages without widening scope
+    # beyond the category this competitor is actually being tracked for.
+    product_links: set[str]
+
+
+async def ingest_page(session: AsyncSession, competitor_slug: str, url: str) -> IngestPageResult:
     """Fetch a competitor's catalog starting at `url`, following whatever
     "next page" link the site itself declares (see fetch_page) for as long
     as one exists, extracting products from each page and writing Product +
     PriceObservation rows for the competitor identified by `competitor_slug`.
+    Also scans each fetched page for promotional banner content (persisting
+    any new Campaign rows found) and collects product-detail links seen on
+    the page, for the caller to optionally crawl individually.
 
     Stops when: the page declares no next link, the declared next link
     points somewhere we've already visited (guards against a "Next" link
@@ -72,11 +216,20 @@ async def ingest_page(session: AsyncSession, competitor_slug: str, url: str) -> 
     competitor = result.scalar_one_or_none()
     if competitor is None:
         raise ValueError(f"Unknown competitor slug: {competitor_slug!r} — run seed_competitors first")
+    # Captured once as plain values, not re-read via `competitor.id` later:
+    # a session.rollback() (see crawl_competitor, which shares this session)
+    # expires every ORM object it's tracking, and a bare attribute read on
+    # an expired async-ORM object outside an explicit await raises
+    # sqlalchemy.exc.MissingGreenlet — confirmed live on a real crawl.
+    competitor_id = competitor.id
+    competitor_website_url = competitor.website_url
 
     seen_names: set[str] = set()
     visited_urls: set[str] = set()
     page_url: str | None = url
     previous_price_context: str | None = None
+    campaigns_found = 0
+    product_links: set[str] = set()
 
     for _ in range(MAX_PAGES_PER_CATALOG_URL):
         if page_url is None or page_url in visited_urls:
@@ -91,31 +244,200 @@ async def ingest_page(session: AsyncSession, competitor_slug: str, url: str) -> 
                 break
         previous_price_context = price_context
 
-        extracted = await extract_products_merged(fetched.text)
+        extracted = await extract_products_merged(fetched, competitor_slug=competitor_slug)
+
+        for detected in await discover_campaigns(fetched.html, page_url):
+            if await _persist_campaign(session, competitor_id, detected):
+                campaigns_found += 1
+
+        page_product_links = extract_product_links(fetched.html, page_url, competitor_website_url)
+        new_links = page_product_links - product_links
+        product_links |= page_product_links
+
         new_items = [item for item in extracted.products if item.name not in seen_names]
-        if not new_items:
+        # A listing page contributes two independent things: products
+        # extracted directly from its own content, and links to individual
+        # product pages. A collection page with no inline JSON-LD/microdata
+        # (common — that data usually lives on the product page, not the
+        # listing) can legitimately extract zero products here while still
+        # linking to dozens of real ones; stopping pagination on that would
+        # silently cap discovery at whatever fit on page one. Only stop once
+        # a page contributes nothing new on *either* front.
+        if not new_items and not new_links:
             break
 
         for item in new_items:
             seen_names.add(item.name)
-            result = await session.execute(
-                select(Product).where(Product.competitor_id == competitor.id, Product.name == item.name)
-            )
-            product = result.scalar_one_or_none()
-            if product is None:
-                product = Product(competitor_id=competitor.id, sku=item.sku, name=item.name, url=page_url)
-                session.add(product)
-
-            session.add(
-                PriceObservation(
-                    price=item.price,
-                    currency=item.currency,
-                    in_stock=item.in_stock,
-                    promo_text=item.promo_text,
-                    source="scheduled_crawl",
-                    product=product,
-                )
-            )
+            await _persist_extracted_product(session, competitor_id, item, page_url)
 
         await session.commit()
         page_url = fetched.next_page_url
+
+    logger.info(
+        "ingest_page done competitor=%s start_url=%s pages=%d products=%d campaigns=%d product_links=%d",
+        competitor_slug,
+        url,
+        len(visited_urls),
+        len(seen_names),
+        campaigns_found,
+        len(product_links),
+    )
+    return IngestPageResult(campaigns_found=campaigns_found, product_links=product_links)
+
+
+async def _find_competitor_config(slug: str) -> CompetitorConfig:
+    for entry in load_competitors_config():
+        if entry.slug == slug:
+            return entry
+    raise ValueError(f"No config/competitors.yaml entry for competitor slug: {slug!r}")
+
+
+async def crawl_competitor(session: AsyncSession, competitor_slug: str) -> CrawlRun:
+    """Full pipeline for one competitor: discover URLs from its configured
+    website_url/catalog_urls (see app/scraping/discovery.py), fetch and
+    extract each, persist Products/PriceObservations/Campaigns, and record
+    a CrawlRun. A failure fetching or processing any single URL is caught
+    and logged into the CrawlRun's error_log, not raised — one bad page
+    must not abort the whole competitor's crawl.
+    """
+    result = await session.execute(select(Competitor).where(Competitor.slug == competitor_slug))
+    competitor = result.scalar_one_or_none()
+    if competitor is None:
+        raise ValueError(f"Unknown competitor slug: {competitor_slug!r} — run seed_competitors first")
+    # Captured once as a plain value — see the matching comment in
+    # ingest_page for why `competitor.id` can't just be re-read later:
+    # this session sees many session.rollback() calls across the loops
+    # below, each of which expires every ORM object it's tracking, and a
+    # bare attribute read on an expired object outside an explicit await
+    # raises sqlalchemy.exc.MissingGreenlet.
+    competitor_id = competitor.id
+
+    config = await _find_competitor_config(competitor_slug)
+
+    crawl_run = CrawlRun(competitor_id=competitor_id, status="running")
+    session.add(crawl_run)
+    await session.commit()
+
+    errors: list[str] = []
+    pages_fetched = 0
+    campaigns_found = 0
+
+    try:
+        discovered = await discover_urls(
+            config.website_url, config.crawl.catalog_urls, rate_limit_seconds=config.crawl.rate_limit_seconds
+        )
+        logger.info(
+            "discovery competitor=%s products=%d categories=%d promos=%d unknown=%d",
+            competitor_slug,
+            len(discovered.product_urls),
+            len(discovered.category_urls),
+            len(discovered.promotional_urls),
+            len(discovered.unknown_urls),
+        )
+
+        # Category/listing pages: fetch + extract + follow pagination via
+        # the existing ingest_page loop, which also runs campaign detection
+        # and collects product-detail links on every page (including
+        # paginated ones) it visits.
+        category_product_urls: set[str] = set()
+        for category_url in list(discovered.category_urls)[:MAX_CATEGORY_URLS_PER_CRAWL]:
+            try:
+                page_result = await ingest_page(session, competitor_slug, category_url)
+                campaigns_found += page_result.campaigns_found
+                category_product_urls |= page_result.product_links
+                pages_fetched += 1
+            except Exception:
+                logger.warning("category crawl failed url=%s", category_url, exc_info=True)
+                errors.append(f"category {category_url}: fetch/extract failed")
+                # A failed flush/commit leaves the session unusable until
+                # rolled back — without this, one bad category page would
+                # take down every URL processed after it, not just itself.
+                await session.rollback()
+
+        # Individual product-detail pages: the union of links found on the
+        # crawled category page(s) and the site-wide sitemap — tracking
+        # scope is a competitor's full catalog, so both signals are used
+        # together rather than one being a fallback for the other (the
+        # sitemap may miss products a category listing links to and vice
+        # versa).
+        product_url_source = category_product_urls | discovered.product_urls
+        logger.info(
+            "product URLs for competitor=%s: %d from category pages, %d from sitemap, %d combined",
+            competitor_slug,
+            len(category_product_urls),
+            len(discovered.product_urls),
+            len(product_url_source),
+        )
+
+        for product_url in list(product_url_source)[:MAX_PRODUCT_URLS_PER_CRAWL]:
+            try:
+                fetched = await fetch_page(product_url, rate_limit_seconds=config.crawl.rate_limit_seconds)
+                pages_fetched += 1
+                extracted = await extract_products_merged(fetched, competitor_slug=competitor_slug)
+                for item in extracted.products:
+                    await _persist_extracted_product(session, competitor_id, item, product_url)
+                await session.commit()
+            except Exception:
+                logger.warning("product page fetch failed url=%s", product_url, exc_info=True)
+                errors.append(f"product {product_url}: fetch/extract failed")
+                await session.rollback()
+
+        # Promotional/sale landing pages: campaign detection only — these
+        # pages are marketing copy, not clean product listings.
+        for promo_url in list(discovered.promotional_urls)[:MAX_PROMOTIONAL_URLS_PER_CRAWL]:
+            try:
+                fetched = await fetch_page(promo_url, rate_limit_seconds=config.crawl.rate_limit_seconds)
+                pages_fetched += 1
+                for detected in await discover_campaigns(fetched.html, promo_url):
+                    if await _persist_campaign(session, competitor_id, detected):
+                        campaigns_found += 1
+                await session.commit()
+            except Exception:
+                logger.warning("promo page fetch failed url=%s", promo_url, exc_info=True)
+                errors.append(f"promo {promo_url}: fetch/extract failed")
+                await session.rollback()
+
+        # The homepage itself is also a common home for an announcement bar
+        # or hero banner, and isn't necessarily one of the discovered
+        # category/promo URLs above.
+        try:
+            homepage = await fetch_page(config.website_url, rate_limit_seconds=config.crawl.rate_limit_seconds)
+            pages_fetched += 1
+            for detected in await discover_campaigns(homepage.html, config.website_url):
+                if await _persist_campaign(session, competitor_id, detected):
+                    campaigns_found += 1
+            await session.commit()
+        except Exception:
+            logger.warning("homepage fetch failed url=%s", config.website_url, exc_info=True)
+            errors.append(f"homepage {config.website_url}: fetch failed")
+            await session.rollback()
+
+        final_status = "failed" if errors and pages_fetched == 0 else ("partial_failure" if errors else "success")
+    except Exception as exc:
+        # A failure in discover_urls() itself (e.g. the site is entirely
+        # unreachable) — nothing above ran, but the CrawlRun still records
+        # the attempt rather than leaving it stuck at "running" forever.
+        logger.exception("crawl failed competitor=%s", competitor_slug)
+        errors.append(f"discovery: {exc}")
+        final_status = "failed"
+        await session.rollback()
+
+    crawl_run.status = final_status
+    crawl_run.finished_at = _utcnow()
+    crawl_run.pages_fetched = pages_fetched
+    crawl_run.error_log = "\n".join(errors) if errors else None
+    await session.commit()
+
+    # Not `crawl_run.status` — commit() (like rollback()) expires every ORM
+    # object in the session by default, and a bare attribute read on an
+    # expired async-ORM object outside an explicit await raises
+    # sqlalchemy.exc.MissingGreenlet (see the comments above competitor_id).
+    logger.info(
+        "crawl finished competitor=%s status=%s pages_fetched=%d campaigns_found=%d errors=%d",
+        competitor_slug,
+        final_status,
+        pages_fetched,
+        campaigns_found,
+        len(errors),
+    )
+    return crawl_run

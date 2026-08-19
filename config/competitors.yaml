@@ -8,9 +8,14 @@
 #
 # Loaded by backend/app/core/config.py at startup and on each scheduled run.
 #
-# Real competitors for Gardens Alive. Tracked category: perennials & flowering
-# plants, kept consistent across all competitors for apples-to-apples pricing
-# comparison and SWOT generation. Burpee (burpee.com) is deliberately excluded —
+# Real competitors for Gardens Alive. Tracked scope: each competitor's full
+# product catalog (2026-08-17) — the scraping pipeline discovers products
+# site-wide via each competitor's sitemap, not just the one category below.
+# `catalog_urls` remains per competitor as a known-good seed page (guaranteed
+# included regardless of sitemap discovery, and still individually crawled
+# for its own product links + campaign banners) — originally the *only*
+# scope, kept now because it's a real, human-verified entry point, not
+# because scope is still limited to it. Burpee (burpee.com) is deliberately excluded —
 # its perennials pages are behind DataDome bot-detection (HTTP 403 with a
 # challenge page), which is an explicit signal the site doesn't want automated
 # access. Circumventing that would cross from polite scraping into deliberately

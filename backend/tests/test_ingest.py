@@ -30,7 +30,7 @@ class TestPriceContextFingerprint:
 
 
 def _page(text: str, next_url: str | None) -> FetchedPage:
-    return FetchedPage(text=text, next_page_url=next_url)
+    return FetchedPage(url="https://acme.example/catalog", html="", text=text, next_page_url=next_url, fetched_via="http")
 
 
 def _products(*names: str) -> ExtractedProductList:
@@ -66,6 +66,21 @@ async def test_stops_when_no_next_link(db_session, competitor):
     assert mock_fetch.await_count == 1
     result = await db_session.execute(select(Product).where(Product.competitor_id == competitor.id))
     assert {p.name for p in result.scalars()} == {"Widget"}
+
+
+async def test_collects_product_links_found_on_the_page(db_session, competitor):
+    html = '<a href="/products/widget">Widget</a><a href="/collections/all">All</a>'
+    page = FetchedPage(url="https://acme.example/catalog", html=html, text="Widget $9.99", next_page_url=None, fetched_via="http")
+    with (
+        patch("app.scraping.ingest.fetch_page", new_callable=AsyncMock) as mock_fetch,
+        patch("app.scraping.ingest.extract_products_merged", new_callable=AsyncMock) as mock_extract,
+    ):
+        mock_fetch.return_value = page
+        mock_extract.return_value = _products("Widget")
+
+        result = await ingest_page(db_session, competitor.slug, "https://acme.example/catalog")
+
+    assert result.product_links == {"https://acme.example/products/widget"}
 
 
 async def test_stops_when_revisiting_a_url(db_session, competitor):
@@ -125,6 +140,58 @@ async def test_stops_when_no_new_products_found(db_session, competitor):
     assert mock_extract.await_count == 2
     result = await db_session.execute(select(Product).where(Product.competitor_id == competitor.id))
     assert {p.name for p in result.scalars()} == {"Widget"}
+
+
+def _page_with_links(links: list[str], next_url: str | None, filler: str = "aaaa") -> FetchedPage:
+    """A page whose own extraction finds nothing (no JSON-LD/microdata on
+    a typical listing page), but which links to real product pages —
+    the case that used to stop pagination prematurely. `filler` varies the
+    price-context fingerprint between pages so the recycled-pagination
+    guard (see PRICE_CONTEXT_SIMILARITY_THRESHOLD) doesn't itself stop the
+    loop before product_links gets a chance to matter.
+    """
+    html = "".join(f'<a href="{link}">item</a>' for link in links)
+    return FetchedPage(
+        url="https://acme.example/catalog", html=html, text=_page_text("$9.99", filler), next_page_url=next_url, fetched_via="http"
+    )
+
+
+async def test_continues_pagination_when_page_has_product_links_but_no_extracted_products(db_session, competitor):
+    """A collection page can legitimately extract zero products from its
+    own content (no inline JSON-LD/microdata) while still linking to real
+    product pages — pagination must not stop just because new_items was
+    empty if the page contributed new product_links.
+    """
+    with (
+        patch("app.scraping.ingest.fetch_page", new_callable=AsyncMock) as mock_fetch,
+        patch("app.scraping.ingest.extract_products_merged", new_callable=AsyncMock) as mock_extract,
+    ):
+        mock_fetch.side_effect = [
+            _page_with_links(["/products/a"], "https://acme.example/catalog?page=2", filler="aaaa"),
+            _page_with_links(["/products/b"], None, filler="bbbb"),
+        ]
+        mock_extract.return_value = _products()  # empty — nothing extracted from the listing itself
+
+        result = await ingest_page(db_session, competitor.slug, "https://acme.example/catalog?page=1")
+
+    assert mock_fetch.await_count == 2
+    assert result.product_links == {
+        "https://acme.example/products/a",
+        "https://acme.example/products/b",
+    }
+
+
+async def test_stops_when_a_page_has_neither_new_products_nor_new_links(db_session, competitor):
+    with (
+        patch("app.scraping.ingest.fetch_page", new_callable=AsyncMock) as mock_fetch,
+        patch("app.scraping.ingest.extract_products_merged", new_callable=AsyncMock) as mock_extract,
+    ):
+        mock_fetch.return_value = _page_with_links([], "https://acme.example/catalog?page=2")
+        mock_extract.return_value = _products()
+
+        await ingest_page(db_session, competitor.slug, "https://acme.example/catalog?page=1")
+
+    assert mock_fetch.await_count == 1
 
 
 async def test_follows_real_multi_page_pagination(db_session, competitor):
