@@ -119,8 +119,29 @@ export function getCompetitor(slug: string): Promise<Competitor | null> {
   return apiFetch<Competitor>(`/competitors/${slug}`);
 }
 
-export async function getCompetitorProducts(slug: string, limit = 50): Promise<Product[]> {
-  return (await apiFetch<Product[]>(`/competitors/${slug}/products?limit=${limit}`)) ?? [];
+export interface ProductsPage {
+  products: Product[];
+  total: number;
+}
+
+// A competitor's full catalog can now run into the thousands (the scraping
+// pipeline tracks a competitor's whole catalog, not one category), so this
+// is a real paginated fetch, not a capped snapshot — the backend reports
+// the true total via the X-Total-Count header alongside the current page.
+export async function getCompetitorProducts(
+  slug: string,
+  { limit = 50, offset = 0 }: { limit?: number; offset?: number } = {}
+): Promise<ProductsPage> {
+  const res = await fetch(`${INTERNAL_API_URL}/competitors/${slug}/products?limit=${limit}&offset=${offset}`, {
+    cache: "no-store",
+  });
+  if (res.status === 404) return { products: [], total: 0 };
+  if (!res.ok) {
+    throw new Error(`API request to /competitors/${slug}/products failed: ${res.status} ${res.statusText}`);
+  }
+  const products: Product[] = await res.json();
+  const total = Number(res.headers.get("X-Total-Count") ?? products.length);
+  return { products, total };
 }
 
 export function getLatestSWOT(slug: string): Promise<SWOTAnalysis | null> {

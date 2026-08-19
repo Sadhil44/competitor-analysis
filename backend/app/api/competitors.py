@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -26,20 +26,31 @@ async def get_competitor(slug: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{slug}/products", response_model=list[ProductRead])
-async def list_competitor_products(slug: str, limit: int = 50, db: AsyncSession = Depends(get_db)):
+async def list_competitor_products(
+    slug: str, response: Response, limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)
+):
     # Some own-brand competitors (e.g. gardeners-supply-retail) have 30K+
-    # products from the feed import — capped by default so this stays a
-    # cheap request; callers that genuinely need everything can raise
-    # `limit`.
+    # products from the feed import, and the scraping pipeline now tracks
+    # a competitor's full catalog rather than one category — capped by
+    # default so this stays a cheap request; callers page through the rest
+    # via `offset`. Total count goes in a response header (X-Total-Count)
+    # rather than changing the response body shape, so existing callers
+    # that just want `limit` products unpaginated are unaffected.
     result = await db.execute(select(Competitor).where(Competitor.slug == slug))
     competitor = result.scalar_one_or_none()
     if competitor is None:
         raise HTTPException(status_code=404, detail=f"No competitor with slug {slug!r}")
 
+    total = (
+        await db.execute(select(func.count(Product.id)).where(Product.competitor_id == competitor.id))
+    ).scalar_one()
+    response.headers["X-Total-Count"] = str(total)
+
     result = await db.execute(
         select(Product)
         .where(Product.competitor_id == competitor.id)
         .order_by(Product.name)
+        .offset(offset)
         .limit(limit)
     )
     products = result.scalars().all()

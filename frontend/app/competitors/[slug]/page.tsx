@@ -12,18 +12,24 @@ import {
   getLatestSWOT,
 } from "@/lib/api";
 
+const PRODUCTS_PER_PAGE = 50;
+
 export default async function CompetitorPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<{ page?: string }>;
 }) {
   const { slug } = await params;
+  const { page: pageParam } = await searchParams;
+  const page = Math.max(1, Number(pageParam) || 1);
 
   const competitor = await getCompetitor(slug);
   if (!competitor) notFound();
 
-  const [products, swot, developments, campaigns] = await Promise.all([
-    getCompetitorProducts(slug),
+  const [productsPage, swot, developments, campaigns] = await Promise.all([
+    getCompetitorProducts(slug, { limit: PRODUCTS_PER_PAGE, offset: (page - 1) * PRODUCTS_PER_PAGE }),
     getLatestSWOT(slug),
     getDevelopments(slug),
     getCampaigns(slug),
@@ -60,7 +66,13 @@ export default async function CompetitorPage({
       <SWOTPanel swot={swot} />
       <CampaignsFeed campaigns={campaigns} />
       <DevelopmentsFeed developments={developments} />
-      <ProductsTable slug={slug} products={products} />
+      <ProductsTable
+        slug={slug}
+        products={productsPage.products}
+        total={productsPage.total}
+        page={page}
+        perPage={PRODUCTS_PER_PAGE}
+      />
     </div>
   );
 }
@@ -207,55 +219,103 @@ function CampaignsFeed({ campaigns }: { campaigns: Campaign[] }) {
   );
 }
 
-function ProductsTable({ slug, products }: { slug: string; products: Product[] }) {
+function ProductsTable({
+  slug,
+  products,
+  total,
+  page,
+  perPage,
+}: {
+  slug: string;
+  products: Product[];
+  total: number;
+  page: number;
+  perPage: number;
+}) {
+  const rangeStart = total === 0 ? 0 : (page - 1) * perPage + 1;
+  const rangeEnd = Math.min(page * perPage, total);
+  const hasPrev = page > 1;
+  const hasNext = rangeEnd < total;
+
   return (
     <section>
       <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
         Products
-        {products.length > 0 && (
-          <span className="ml-2 normal-case text-zinc-400">(showing {products.length})</span>
+        {total > 0 && (
+          <span className="ml-2 normal-case text-zinc-400">
+            (showing {rangeStart}–{rangeEnd} of {total})
+          </span>
         )}
       </h2>
       {products.length === 0 ? (
         <p className="text-sm text-zinc-500 dark:text-zinc-500">No products recorded yet for {slug}.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-100 text-left text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500">
-              <tr>
-                <th className="px-4 py-2">Name</th>
-                <th className="px-4 py-2">SKU</th>
-                <th className="px-4 py-2">Grade</th>
-                <th className="px-4 py-2">Latest price</th>
-                <th className="px-4 py-2">Stock</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-              {products.map((p) => (
-                <tr key={p.id} className="bg-white hover:bg-zinc-50 dark:bg-zinc-950 dark:hover:bg-zinc-900">
-                  <td className="px-4 py-2">
-                    <Link href={`/products/${p.id}`} className="hover:underline">
-                      {p.name}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2 text-zinc-500 dark:text-zinc-500">{p.sku ?? "—"}</td>
-                  <td className="px-4 py-2 text-zinc-500 dark:text-zinc-500">{p.grade ?? "—"}</td>
-                  <td className="px-4 py-2 tabular-nums">
-                    {p.latest_price !== null
-                      ? new Intl.NumberFormat("en-US", {
-                          style: "currency",
-                          currency: p.currency ?? "USD",
-                        }).format(Number(p.latest_price))
-                      : "—"}
-                  </td>
-                  <td className="px-4 py-2 text-zinc-500 dark:text-zinc-500">
-                    {p.in_stock === null ? "—" : p.in_stock ? "In stock" : "Out of stock"}
-                  </td>
+        <>
+          <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+            <table className="w-full text-sm">
+              <thead className="bg-zinc-100 text-left text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500">
+                <tr>
+                  <th className="px-4 py-2">Name</th>
+                  <th className="px-4 py-2">Category</th>
+                  <th className="px-4 py-2">SKU</th>
+                  <th className="px-4 py-2">Grade</th>
+                  <th className="px-4 py-2">Latest price</th>
+                  <th className="px-4 py-2">Stock</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                {products.map((p) => (
+                  <tr key={p.id} className="bg-white hover:bg-zinc-50 dark:bg-zinc-950 dark:hover:bg-zinc-900">
+                    <td className="px-4 py-2">
+                      <Link href={`/products/${p.id}`} className="hover:underline">
+                        {p.name}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2 text-zinc-500 dark:text-zinc-500">{p.category || "—"}</td>
+                    <td className="px-4 py-2 text-zinc-500 dark:text-zinc-500">{p.sku ?? "—"}</td>
+                    <td className="px-4 py-2 text-zinc-500 dark:text-zinc-500">{p.grade ?? "—"}</td>
+                    <td className="px-4 py-2 tabular-nums">
+                      {p.latest_price !== null
+                        ? new Intl.NumberFormat("en-US", {
+                            style: "currency",
+                            currency: p.currency ?? "USD",
+                          }).format(Number(p.latest_price))
+                        : "—"}
+                    </td>
+                    <td className="px-4 py-2 text-zinc-500 dark:text-zinc-500">
+                      {p.in_stock === null ? "—" : p.in_stock ? "In stock" : "Out of stock"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {(hasPrev || hasNext) && (
+            <div className="mt-3 flex items-center justify-between text-sm">
+              {hasPrev ? (
+                <Link
+                  href={`/competitors/${slug}?page=${page - 1}`}
+                  className="text-sky-600 hover:underline dark:text-sky-400"
+                >
+                  ← Previous
+                </Link>
+              ) : (
+                <span />
+              )}
+              <span className="text-zinc-400">Page {page}</span>
+              {hasNext ? (
+                <Link
+                  href={`/competitors/${slug}?page=${page + 1}`}
+                  className="text-sky-600 hover:underline dark:text-sky-400"
+                >
+                  Next →
+                </Link>
+              ) : (
+                <span />
+              )}
+            </div>
+          )}
+        </>
       )}
     </section>
   );
