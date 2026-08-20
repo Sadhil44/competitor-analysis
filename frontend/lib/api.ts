@@ -179,3 +179,52 @@ export async function searchProducts(q: string, limit = 20): Promise<ComparableP
 export async function getComparableProducts(productId: number): Promise<ComparableProduct[]> {
   return (await apiFetch<ComparableProduct[]>(`/products/${productId}/comparable`)) ?? [];
 }
+
+export interface ActivityItem {
+  kind: "campaign" | "development";
+  id: number;
+  competitor_slug: string;
+  competitor_name: string;
+  title: string;
+  detail: string;
+  at: string;
+  category?: string;
+  discount_text?: string;
+}
+
+// No dedicated backend endpoint for this — it fans the existing per-competitor
+// campaigns/developments calls out across every tracked competitor and merges
+// them client-side (server-side here; this runs in a Server Component) into
+// one timeline. Cheap enough at this data volume to skip a new aggregate route.
+export async function getRecentActivity(competitors: Competitor[], limit = 12): Promise<ActivityItem[]> {
+  const perCompetitor = await Promise.all(
+    competitors.map(async (c) => {
+      const [campaigns, developments] = await Promise.all([getCampaigns(c.slug), getDevelopments(c.slug)]);
+      const campaignItems: ActivityItem[] = campaigns.map((camp) => ({
+        kind: "campaign",
+        id: camp.id,
+        competitor_slug: c.slug,
+        competitor_name: c.name,
+        title: camp.title,
+        detail: camp.description,
+        at: camp.discovered_at,
+        discount_text: camp.discount_text,
+      }));
+      const developmentItems: ActivityItem[] = developments.map((dev) => ({
+        kind: "development",
+        id: dev.id,
+        competitor_slug: c.slug,
+        competitor_name: c.name,
+        title: dev.title,
+        detail: dev.summary,
+        at: dev.discovered_at,
+        category: dev.category,
+      }));
+      return [...campaignItems, ...developmentItems];
+    })
+  );
+  return perCompetitor
+    .flat()
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+    .slice(0, limit);
+}
