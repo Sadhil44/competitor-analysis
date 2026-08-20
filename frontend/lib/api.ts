@@ -14,6 +14,9 @@ export interface Competitor {
   is_own_brand: boolean;
   brand_num: number | null;
   created_at: string;
+  product_count: number;
+  last_crawled_at: string | null;
+  last_crawl_status: string | null;
 }
 
 export interface Product {
@@ -164,6 +167,13 @@ export async function getCampaigns(slug: string): Promise<Campaign[]> {
 
 export async function getProductCampaigns(productId: number): Promise<Campaign[]> {
   return (await apiFetch<Campaign[]>(`/products/${productId}/campaigns`)) ?? [];
+}
+
+export async function searchProducts(q: string, limit = 20): Promise<ComparableProduct[]> {
+  if (!q.trim()) return [];
+  return (
+    (await apiFetch<ComparableProduct[]>(`/products/search?q=${encodeURIComponent(q)}&limit=${limit}`)) ?? []
+  );
 }
 
 export async function getComparableProducts(productId: number): Promise<ComparableProduct[]> {

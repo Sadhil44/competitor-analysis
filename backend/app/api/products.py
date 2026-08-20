@@ -20,51 +20,17 @@ def _significant_keywords(name: str) -> list[str]:
     return [w for w in words if len(w) > 2 and w not in _STOPWORDS]
 
 
-@router.get("/{product_id}", response_model=ProductRead)
-async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
-    # AsyncSession.get() is the shorthand for a primary-key lookup — simpler
-    # than select(Product).where(Product.id == product_id) for this case.
-    product = await db.get(Product, product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail=f"No product with id {product_id}")
-    return product
-
-
-@router.get("/{product_id}/campaigns", response_model=list[CampaignRead])
-async def get_product_campaigns(product_id: int, db: AsyncSession = Depends(get_db)):
-    product = await db.get(Product, product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail=f"No product with id {product_id}")
-
-    result = await db.execute(
-        select(Campaign)
-        .where(Campaign.product_id == product_id)
-        .order_by(Campaign.discovered_at.desc())
-    )
-    return result.scalars().all()
-
-
-@router.get("/{product_id}/comparable", response_model=list[ComparableProduct])
-async def get_comparable_products(
-    product_id: int, limit: int = 5, db: AsyncSession = Depends(get_db)
-):
-    """Products from OTHER competitors whose names share significant words
-    with this one (Postgres full-text search, ranked by relevance) — a
-    deliberately simple keyword match rather than fuzzy/LLM matching: cheap,
-    deterministic, and the ranking is easy to sanity-check by eye.
-
-    The query ORs the significant words together (at least one must match),
-    not ANDs them — plainto_tsquery's default AND semantics meant a 5-word
-    name like "Darwin Hybrid Tulip Olympic Flame" required every one of
-    those words to appear in a candidate name, so real matches like "Van
-    Eijk Darwin Hybrid Tulip" (missing "olympic"/"flame") were silently
-    excluded.
+async def _search_by_keywords(
+    db: AsyncSession, keywords: list[str], *, exclude_competitor_id: int | None, limit: int
+) -> list[ComparableProduct]:
+    """Postgres full-text search over Product.name, ranked by relevance —
+    the shared core behind both "find comparable products for this one"
+    (excludes the source product's own competitor) and open-ended
+    cross-competitor search (no exclusion). ORs the keywords together, not
+    ANDs them — plainto_tsquery's default AND semantics meant a 5-word name
+    required every one of those words to appear in a candidate name, which
+    silently excluded real matches missing just one word.
     """
-    product = await db.get(Product, product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail=f"No product with id {product_id}")
-
-    keywords = _significant_keywords(product.name)
     if not keywords:
         return []
 
@@ -75,10 +41,12 @@ async def get_comparable_products(
     stmt = (
         select(Product, Competitor, rank.label("rank"))
         .join(Competitor, Competitor.id == Product.competitor_id)
-        .where(Product.competitor_id != product.competitor_id, name_vector.op("@@")(query))
+        .where(name_vector.op("@@")(query))
         .order_by(rank.desc())
         .limit(limit)
     )
+    if exclude_competitor_id is not None:
+        stmt = stmt.where(Product.competitor_id != exclude_competitor_id)
     rows = (await db.execute(stmt)).all()
 
     matched_product_ids = [row.Product.id for row in rows]
@@ -108,3 +76,53 @@ async def get_comparable_products(
             )
         )
     return results
+
+
+@router.get("/search", response_model=list[ComparableProduct])
+async def search_products(q: str, limit: int = 20, db: AsyncSession = Depends(get_db)):
+    """Cross-competitor product search by name/keyword — the same
+    full-text-search machinery behind "comparable products", opened up as
+    a standalone search that doesn't require starting from an existing
+    product. Registered ahead of /{product_id} so "search" isn't swallowed
+    as a product_id path param.
+    """
+    return await _search_by_keywords(db, _significant_keywords(q), exclude_competitor_id=None, limit=limit)
+
+
+@router.get("/{product_id}", response_model=ProductRead)
+async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
+    # AsyncSession.get() is the shorthand for a primary-key lookup — simpler
+    # than select(Product).where(Product.id == product_id) for this case.
+    product = await db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail=f"No product with id {product_id}")
+    return product
+
+
+@router.get("/{product_id}/campaigns", response_model=list[CampaignRead])
+async def get_product_campaigns(product_id: int, db: AsyncSession = Depends(get_db)):
+    product = await db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail=f"No product with id {product_id}")
+
+    result = await db.execute(
+        select(Campaign)
+        .where(Campaign.product_id == product_id)
+        .order_by(Campaign.discovered_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.get("/{product_id}/comparable", response_model=list[ComparableProduct])
+async def get_comparable_products(
+    product_id: int, limit: int = 5, db: AsyncSession = Depends(get_db)
+):
+    """Products from OTHER competitors whose names share significant words
+    with this one, ranked by relevance — see _search_by_keywords."""
+    product = await db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail=f"No product with id {product_id}")
+
+    return await _search_by_keywords(
+        db, _significant_keywords(product.name), exclude_competitor_id=product.competitor_id, limit=limit
+    )

@@ -7,7 +7,14 @@ originally assumed it was always a string and every real (thinking-enabled)
 response crashed the /agent/ask endpoint with a Pydantic validation error.
 """
 
-from app.agent.orchestrator import OrchestratorState, _extract_text, _route_selector
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from app.agent.orchestrator import (
+    OrchestratorState,
+    _extract_text,
+    _extract_tool_names,
+    _route_selector,
+)
 
 
 class TestExtractText:
@@ -36,3 +43,29 @@ class TestRouteSelector:
     def test_returns_the_route_field(self):
         state: OrchestratorState = {"messages": [], "route": "swot"}
         assert _route_selector(state) == "swot"
+
+
+class TestExtractToolNames:
+    def test_reads_from_tool_messages_not_tool_call_intents(self):
+        # An AIMessage.tool_calls entry is only the model's *request* to call
+        # a tool — the ToolMessage that follows is its actual, completed
+        # response, which is what "this tool actually ran" should mean.
+        messages = [
+            HumanMessage(content="what's new with X"),
+            AIMessage(content="", tool_calls=[{"name": "search_developments", "args": {}, "id": "1"}]),
+            ToolMessage(content="...", name="search_developments", tool_call_id="1"),
+            AIMessage(content="Here's what's new."),
+        ]
+        assert _extract_tool_names(messages) == ["search_developments"]
+
+    def test_dedupes_while_preserving_first_use_order(self):
+        messages = [
+            ToolMessage(content="a", name="search_campaigns", tool_call_id="1"),
+            ToolMessage(content="b", name="query_price_history", tool_call_id="2"),
+            ToolMessage(content="c", name="search_campaigns", tool_call_id="3"),
+        ]
+        assert _extract_tool_names(messages) == ["search_campaigns", "query_price_history"]
+
+    def test_no_tool_messages_returns_empty_list(self):
+        messages = [HumanMessage(content="hi"), AIMessage(content="hello")]
+        assert _extract_tool_names(messages) == []

@@ -41,12 +41,23 @@ services:
     env_file: .env
     environment:
       # Browser-side fetches (the ask-agent page) leave the Docker network
-      # entirely, so they need the host-mapped port.
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      # entirely, so they need the host-mapped port. 127.0.0.1, not
+      # localhost: on this host, "localhost" resolves to ::1 first and
+      # Docker Desktop's port mapping doesn't answer on it, so a browser
+      # fetch to "localhost:8000" hangs/fails even though the port really
+      # is published — 127.0.0.1 forces the IPv4 path that actually works.
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
       # Server Components run inside this container, so "localhost" would
       # mean the frontend container itself, not backend — use the compose
       # service name instead.
       INTERNAL_API_URL: http://backend:8000
+      # Docker Desktop's Windows<->Linux filesystem bridge doesn't reliably
+      # propagate inotify events for host-side edits, so Turbopack's file
+      # watcher (and its persistent .next/dev cache) can silently keep
+      # serving stale output after a save. Polling-based watching notices
+      # the change instead of waiting for an event that may never arrive.
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
     depends_on:
       - backend
     ports:

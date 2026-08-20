@@ -10,7 +10,15 @@ app = FastAPI(title="Competitor Analysis API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    # "localhost" and "127.0.0.1" are different origins as far as CORS'
+    # exact-string allowlist is concerned, even though they're the same
+    # machine — and on Windows + Docker Desktop, "localhost" can silently
+    # fail to resolve to the container's IPv4 port mapping (resolves to
+    # ::1 first, which Docker Desktop doesn't forward), making 127.0.0.1
+    # the address that actually works. Both need to be allowed, or the
+    # browser-side ask-agent fetch fails outright depending on which one
+    # the user's browser happens to use.
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://host.docker.internal:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -1,6 +1,8 @@
 """LangGraph orchestrator: classifies a question, routes it to the general
 Q&A agent or to the swot/developments subagent, then returns the final
-answer text.
+answer text plus lightweight verification metadata (which tools actually
+grounded the answer, and — for SWOT — whether the required save actually
+happened).
 
 Replaces the earlier Claude Agent SDK orchestrator (which used `query()` +
 implicit Agent-tool delegation) with an explicit LangGraph StateGraph —
@@ -15,11 +17,12 @@ at the top level with framework-provided tool-calling loops underneath.
 from typing import Literal, TypedDict
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
 from app.agent.subagents import DEVELOPMENTS_AGENT, GENERAL_AGENT, SWOT_AGENT
+from app.schemas.agent import ChatTurn
 
 ROUTER_MODEL = "claude-haiku-4-5"
 
@@ -30,7 +33,10 @@ ROUTER_SYSTEM_PROMPT = """Classify what a competitor-analysis question is asking
 - "general": anything else — price history questions, comparisons, general Q&A grounded in recorded data.
 
 Our own company's data is tracked under the slug "gurneys" — treat "us"/"our own"/"Gardens Alive" questions
-about pricing or developments the same as any competitor question, still routed by what's being asked for."""
+about pricing or developments the same as any competitor question, still routed by what's being asked for.
+
+The conversation may include earlier turns — classify based on the latest question, using the earlier turns
+only to resolve what a follow-up like "and what about pricing?" actually refers to."""
 
 
 class RouteDecision(BaseModel):
@@ -41,20 +47,28 @@ class OrchestratorState(TypedDict, total=False):
     messages: list[BaseMessage]
     route: Literal["swot", "developments", "general"]
     answer: str
+    tools_used: list[str]
+    save_verified: bool | None
 
 
 # Haiku, low max_tokens: this call only ever produces one small structured
 # tool call (the route field), not a reasoned response.
 _router_model = ChatAnthropic(model=ROUTER_MODEL, max_tokens=64).with_structured_output(RouteDecision)
 
+# Tools whose successful call is what "this SWOT actually got saved" means —
+# see SWOT_SYSTEM_PROMPT's "Always call save_swot_analysis before finishing".
+# Only swot has an unconditional save requirement: the developments agent is
+# explicitly allowed to save nothing when there's genuinely no real finding
+# ("skip it rather than record noise"), so a missing save there isn't a
+# verification failure the same way it is for swot.
+_REQUIRED_SAVE_TOOL: dict[str, str] = {"swot": "save_swot_analysis"}
+
 
 async def classify(state: OrchestratorState) -> dict:
     question = state["messages"][-1].content
+    history_messages = state["messages"][:-1]
     decision: RouteDecision = await _router_model.ainvoke(
-        [
-            {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
-            {"role": "user", "content": question},
-        ]
+        [{"role": "system", "content": ROUTER_SYSTEM_PROMPT}, *history_messages, {"role": "user", "content": question}]
     )
     return {"route": decision.route}
 
@@ -78,10 +92,34 @@ def _extract_text(content: str | list) -> str:
     )
 
 
+def _extract_tool_names(messages: list[BaseMessage]) -> list[str]:
+    """Tools actually called AND returned during the ReAct loop, in the
+    order first used — read from ToolMessage entries (the tool's real
+    response), not AIMessage.tool_calls (the model's intent to call one),
+    so this reflects what actually executed rather than what was merely
+    requested.
+    """
+    seen: list[str] = []
+    for message in messages:
+        if isinstance(message, ToolMessage) and message.name and message.name not in seen:
+            seen.append(message.name)
+    return seen
+
+
 async def _run_subagent(agent, state: OrchestratorState) -> dict:
     result = await agent.ainvoke({"messages": state["messages"]})
     final_message = result["messages"][-1]
-    return {"messages": result["messages"], "answer": _extract_text(final_message.content)}
+    tools_used = _extract_tool_names(result["messages"])
+
+    required_tool = _REQUIRED_SAVE_TOOL.get(state["route"])
+    save_verified = required_tool in tools_used if required_tool else None
+
+    return {
+        "messages": result["messages"],
+        "answer": _extract_text(final_message.content),
+        "tools_used": tools_used,
+        "save_verified": save_verified,
+    }
 
 
 async def run_general(state: OrchestratorState) -> dict:
@@ -114,6 +152,23 @@ _builder.add_edge("developments", END)
 orchestrator_graph = _builder.compile()
 
 
-async def ask_agent(question: str) -> str:
-    result = await orchestrator_graph.ainvoke({"messages": [HumanMessage(content=question)]})
-    return result["answer"]
+def _to_lc_message(turn: ChatTurn) -> BaseMessage:
+    return HumanMessage(content=turn.content) if turn.role == "user" else AIMessage(content=turn.content)
+
+
+class AgentAnswer(TypedDict):
+    answer: str
+    route: Literal["swot", "developments", "general"]
+    tools_used: list[str]
+    save_verified: bool | None
+
+
+async def ask_agent(question: str, history: list[ChatTurn] | None = None) -> AgentAnswer:
+    messages = [_to_lc_message(turn) for turn in (history or [])] + [HumanMessage(content=question)]
+    result = await orchestrator_graph.ainvoke({"messages": messages})
+    return {
+        "answer": result["answer"],
+        "route": result["route"],
+        "tools_used": result["tools_used"],
+        "save_verified": result["save_verified"],
+    }

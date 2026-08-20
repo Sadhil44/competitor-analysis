@@ -3,17 +3,45 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.models import Competitor, PriceObservation, Product
+from app.models import Competitor, CrawlRun, PriceObservation, Product
 from app.schemas.competitor import CompetitorRead
 from app.schemas.product import ProductRead
 
 router = APIRouter(prefix="/competitors", tags=["competitors"])
 
 
+async def _product_counts(db: AsyncSession) -> dict[int, int]:
+    result = await db.execute(select(Product.competitor_id, func.count(Product.id)).group_by(Product.competitor_id))
+    return dict(result.all())
+
+
+async def _latest_crawl_runs(db: AsyncSession) -> dict[int, CrawlRun]:
+    result = await db.execute(
+        select(CrawlRun).order_by(CrawlRun.competitor_id, CrawlRun.started_at.desc()).distinct(CrawlRun.competitor_id)
+    )
+    return {run.competitor_id: run for run in result.scalars().all()}
+
+
+def _to_read(competitor: Competitor, product_counts: dict[int, int], latest_crawls: dict[int, CrawlRun]) -> CompetitorRead:
+    read = CompetitorRead.model_validate(competitor)
+    read.product_count = product_counts.get(competitor.id, 0)
+    latest_crawl = latest_crawls.get(competitor.id)
+    if latest_crawl is not None:
+        read.last_crawled_at = latest_crawl.started_at
+        read.last_crawl_status = latest_crawl.status
+    return read
+
+
 @router.get("", response_model=list[CompetitorRead])
 async def list_competitors(db: AsyncSession = Depends(get_db)):
+    # Three cheap aggregate queries beat N+1 — the dashboard needs a
+    # product count and last-crawl status per competitor, not just the row
+    # itself, so it can show something more useful than a bare name list.
     result = await db.execute(select(Competitor))
-    return result.scalars().all()
+    competitors = result.scalars().all()
+    product_counts = await _product_counts(db)
+    latest_crawls = await _latest_crawl_runs(db)
+    return [_to_read(c, product_counts, latest_crawls) for c in competitors]
 
 
 @router.get("/{slug}", response_model=CompetitorRead)
@@ -22,7 +50,25 @@ async def get_competitor(slug: str, db: AsyncSession = Depends(get_db)):
     competitor = result.scalar_one_or_none()
     if competitor is None:
         raise HTTPException(status_code=404, detail=f"No competitor with slug {slug!r}")
-    return competitor
+
+    total = (
+        await db.execute(select(func.count(Product.id)).where(Product.competitor_id == competitor.id))
+    ).scalar_one()
+    latest_crawl = (
+        await db.execute(
+            select(CrawlRun)
+            .where(CrawlRun.competitor_id == competitor.id)
+            .order_by(CrawlRun.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    read = CompetitorRead.model_validate(competitor)
+    read.product_count = total
+    if latest_crawl is not None:
+        read.last_crawled_at = latest_crawl.started_at
+        read.last_crawl_status = latest_crawl.status
+    return read
 
 
 @router.get("/{slug}/products", response_model=list[ProductRead])

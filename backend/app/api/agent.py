@@ -8,5 +8,10 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 
 @router.post("/ask", response_model=AgentAskResponse)
 async def ask(request: AgentAskRequest) -> AgentAskResponse:
-    answer = await ask_agent(request.question)
-    return AgentAskResponse(answer=answer)
+    result = await ask_agent(request.question, request.history)
+    return AgentAskResponse(
+        answer=result["answer"],
+        route=result["route"],
+        tools_used=result["tools_used"],
+        save_verified=result["save_verified"],
+    )
