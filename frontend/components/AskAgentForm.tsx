@@ -161,7 +161,8 @@ export default function AskAgentForm() {
           {messages.length > 0 && (
             <div className="mt-2 flex items-center justify-between">
               <p className="text-xs text-zinc-400">
-                Real LLM calls — 10-90s per turn, longer for SWOT/developments.
+                Real LLM calls — 10-60s for Q&amp;A, up to several minutes for SWOT/developments
+                (each chains multiple research steps before saving).
               </p>
               <button
                 type="button"
