@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from anthropic import AsyncAnthropic
 from langchain_core.tools import tool
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.agent.embeddings import embed_text
 from app.db.session import async_session_factory
@@ -29,8 +29,27 @@ _anthropic_client = AsyncAnthropic()
 
 
 async def _find_competitor(session, slug: str) -> Competitor | None:
+    """Resolves the model's best-guess competitor identifier to a row.
+
+    The agent is never given the exact stored slug list, so it often passes
+    a close approximation — different casing/spacing, or a singular/plural
+    mismatch like "Holland Bulb Farm" vs. the stored "Holland Bulb Farms".
+    Falls back from an exact slug match to a normalized-slug and then a
+    loose substring match against slug or name, rather than reporting the
+    competitor untracked over a naming near-miss.
+    """
     result = await session.execute(select(Competitor).where(Competitor.slug == slug))
-    return result.scalar_one_or_none()
+    row = result.scalar_one_or_none()
+    if row is not None:
+        return row
+
+    normalized = slug.strip().lower().replace(" ", "-").replace("_", "-")
+    result = await session.execute(
+        select(Competitor)
+        .where(or_(Competitor.slug.ilike(f"%{normalized}%"), Competitor.name.ilike(f"%{slug}%")))
+        .order_by(func.length(Competitor.slug))
+    )
+    return result.scalars().first()
 
 
 @tool

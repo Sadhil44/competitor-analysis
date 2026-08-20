@@ -23,6 +23,11 @@ from app.agent.tools import (
 )
 
 SUBAGENT_MODEL = "claude-sonnet-5"
+# Haiku is noticeably faster per round-trip, which matters here because each
+# ReAct tool call is its own model round-trip. General Q&A and developments
+# are mostly lookups + digesting recorded data, so Haiku holds up well; SWOT
+# stays on Sonnet since it's the one doing the deepest cross-source synthesis.
+FAST_SUBAGENT_MODEL = "claude-haiku-4-5"
 
 GENERAL_SYSTEM_PROMPT = """You are a competitor analysis assistant for Gardens Alive, a horticultural company.
 You answer questions about competitors' pricing history, strategic developments, and promotional campaigns,
@@ -82,14 +87,15 @@ Steps:
    as noise."""
 
 
-def _agent(system_prompt: str, tools: list):
-    model = ChatAnthropic(model=SUBAGENT_MODEL, max_tokens=4096)
+def _agent(system_prompt: str, tools: list, *, model_name: str = SUBAGENT_MODEL):
+    model = ChatAnthropic(model=model_name, max_tokens=4096)
     return create_react_agent(model=model, tools=tools, prompt=system_prompt)
 
 
 GENERAL_AGENT = _agent(
     GENERAL_SYSTEM_PROMPT,
     [query_price_history, search_developments, search_campaigns, web_search],
+    model_name=FAST_SUBAGENT_MODEL,
 )
 SWOT_AGENT = _agent(
     SWOT_SYSTEM_PROMPT,
@@ -105,4 +111,5 @@ DEVELOPMENTS_AGENT = _agent(
         save_development,
         save_campaign,
     ],
+    model_name=FAST_SUBAGENT_MODEL,
 )
