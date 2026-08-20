@@ -157,13 +157,21 @@ async def _persist_campaign(
     append-only by design (see app/models/campaign.py) so promo history
     over time is preserved, but that's for tracking a promotion's real
     lifecycle — not for re-inserting the same still-running sitewide banner
-    every time a crawl happens to fetch the page it's on. Dedups on
-    (competitor, title, discount_text).
+    every time a crawl happens to fetch the page it's on.
+
+    Dedups on (competitor, product, discount_text) — deliberately NOT
+    title: the same banner gets LLM-normalized into differently-worded
+    titles nearly every time it's seen (observed live: one sitewide "free
+    shipping" banner produced 26 distinctly-titled rows for a single
+    crawl), so requiring an exact title match let all of them through.
+    discount_text is far more stable, and including product_id keeps two
+    real, different product-specific promotions that happen to share a
+    discount_text (e.g. two unrelated "10% off" deals) from colliding.
     """
     result = await session.execute(
         select(Campaign.id).where(
             Campaign.competitor_id == competitor_id,
-            Campaign.title == detected.title,
+            Campaign.product_id == product_id,
             Campaign.discount_text == detected.discount_text,
         )
     )

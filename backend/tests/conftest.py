@@ -81,12 +81,14 @@ async def competitor_factory(db_session):
             .scalars()
             .all()
         )
+        # Campaign rows can reference a product (Campaign.product_id), so
+        # they must go before the products they point to, not after.
+        await db_session.execute(delete(Campaign).where(Campaign.competitor_id.in_(created_ids)))
         if product_ids:
             await db_session.execute(
                 delete(PriceObservation).where(PriceObservation.product_id.in_(product_ids))
             )
             await db_session.execute(delete(Product).where(Product.id.in_(product_ids)))
-        await db_session.execute(delete(Campaign).where(Campaign.competitor_id.in_(created_ids)))
         await db_session.execute(delete(CrawlRun).where(CrawlRun.competitor_id.in_(created_ids)))
         await db_session.execute(delete(Competitor).where(Competitor.id.in_(created_ids)))
         await db_session.commit()

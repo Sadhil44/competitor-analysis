@@ -10,10 +10,11 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from app.models import Product
+from app.models import Campaign, Product
+from app.schemas.campaign import DetectedCampaign
 from app.scraping.extractor import ExtractedProduct, ExtractedProductList
 from app.scraping.fetcher import FetchedPage
-from app.scraping.ingest import _price_context_fingerprint, ingest_page
+from app.scraping.ingest import _persist_campaign, _price_context_fingerprint, ingest_page
 
 
 class TestPriceContextFingerprint:
@@ -51,6 +52,56 @@ def _page_text(price: str, filler: str) -> str:
 @pytest_asyncio.fixture
 async def competitor(competitor_factory):
     return await competitor_factory(name="Acme", website_url="https://acme.example")
+
+
+def _detected(title: str, discount_text: str) -> DetectedCampaign:
+    return DetectedCampaign(
+        title=title, description=title, discount_text=discount_text, source_url="https://acme.example"
+    )
+
+
+class TestPersistCampaign:
+    """Regression coverage for a real issue found live: the same sitewide
+    banner gets LLM-normalized into a differently-worded title nearly every
+    time it's seen, so deduping on an exact title match let 26 near-
+    duplicate rows through for one banner in a single crawl. Dedup now
+    keys on (competitor, product, discount_text) instead.
+    """
+
+    async def test_same_discount_text_different_titles_is_deduped(self, db_session, competitor):
+        first = await _persist_campaign(db_session, competitor.id, _detected("Welcome to Acme", "Free shipping"))
+        second = await _persist_campaign(db_session, competitor.id, _detected("Acme Relaunch!", "Free shipping"))
+        await db_session.commit()
+
+        assert first is True
+        assert second is False
+        result = await db_session.execute(select(Campaign).where(Campaign.competitor_id == competitor.id))
+        assert len(result.scalars().all()) == 1
+
+    async def test_different_discount_text_is_not_deduped(self, db_session, competitor):
+        first = await _persist_campaign(db_session, competitor.id, _detected("Sale", "20% off"))
+        second = await _persist_campaign(db_session, competitor.id, _detected("Sale", "Free shipping"))
+        await db_session.commit()
+
+        assert first is True
+        assert second is True
+
+    async def test_same_discount_text_different_products_is_not_deduped(self, db_session, competitor):
+        product_a = Product(competitor_id=competitor.id, name="Product A", url="")
+        product_b = Product(competitor_id=competitor.id, name="Product B", url="")
+        db_session.add_all([product_a, product_b])
+        await db_session.flush()
+
+        first = await _persist_campaign(
+            db_session, competitor.id, _detected("Sale", "10% off"), product_id=product_a.id
+        )
+        second = await _persist_campaign(
+            db_session, competitor.id, _detected("Sale", "10% off"), product_id=product_b.id
+        )
+        await db_session.commit()
+
+        assert first is True
+        assert second is True
 
 
 async def test_stops_when_no_next_link(db_session, competitor):

@@ -45,6 +45,21 @@ def _clean_text(el) -> str:
     return " ".join(el.get_text(" ", strip=True).split())
 
 
+MAX_TITLE_LENGTH = 80
+
+
+def _truncate_at_word_boundary(text: str, max_len: int) -> str:
+    """A hard text[:max_len] slice can land mid-word ("...Gardens & Collecti")
+    — cut back to the last whole word instead, so a long banner still
+    reads as a real (if incomplete) phrase.
+    """
+    if len(text) <= max_len:
+        return text
+    truncated = text[:max_len]
+    last_space = truncated.rfind(" ")
+    return (truncated[:last_space] if last_space > 0 else truncated) + "…"
+
+
 def _build_discount_text(text: str) -> str:
     parts = []
     percent = _PERCENT_OFF.search(text)
@@ -89,7 +104,12 @@ def detect_campaigns_deterministic(html: str, page_url: str) -> tuple[list[Detec
         discount_text = _build_discount_text(text)
         if discount_text:
             confident.append(
-                DetectedCampaign(title=text[:80], description=text, discount_text=discount_text, source_url=page_url)
+                DetectedCampaign(
+                    title=_truncate_at_word_boundary(text, MAX_TITLE_LENGTH),
+                    description=text,
+                    discount_text=discount_text,
+                    source_url=page_url,
+                )
             )
         else:
             ambiguous.append(text)
