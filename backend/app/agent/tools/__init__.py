@@ -18,6 +18,7 @@ from app.agent.embeddings import embed_text
 from app.db.session import async_session_factory
 from app.intelligence import RAISED_BED_TYPES, WORKBENCH_SLUGS
 from app.intelligence.matching import find_comparables
+from app.intelligence.text import name_matches_query, significant_keywords
 from app.models import Campaign, Competitor, Development, PriceObservation, Product, SWOTAnalysis
 
 SAVE_MODEL = "claude-sonnet-5"
@@ -69,15 +70,35 @@ async def query_price_history(competitor: str, product_query: str, days: int) ->
             return f"No competitor with slug {competitor!r}"
 
         since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+
+        # Bidirectional keyword-overlap match, not a literal substring — a
+        # query like "workbench" must still find a product actually named
+        # "Cedar Potting Bench"/"Cedar Bench Kit". Neither ilike(f"%{query}%")
+        # NOR an OR'd-keyword ilike catches that: "workbench" isn't a
+        # substring of "Cedar Potting Bench" either way — the name's own
+        # word "bench" is a substring of the query word "workbench", which
+        # only name_matches_query's word-by-word check finds (see
+        # app/intelligence/text.py's docstring for the full story). Fetching
+        # candidates by competitor first (cheap, indexed) and filtering in
+        # Python is what makes that check possible at all — it isn't
+        # expressible as a single ilike clause.
+        keywords = significant_keywords(product_query)
+        candidates = (
+            await session.execute(select(Product).where(Product.competitor_id == competitor_row.id))
+        ).scalars().all()
+        matched_ids = [p.id for p in candidates if name_matches_query(p.name, keywords)]
+        if not matched_ids:
+            return "No matching price history found."
+
         stmt = (
             select(Product, PriceObservation)
             .join(PriceObservation, PriceObservation.product_id == Product.id)
-            .where(
-                Product.competitor_id == competitor_row.id,
-                Product.name.ilike(f"%{product_query}%"),
-                PriceObservation.observed_at >= since,
-            )
+            .where(Product.id.in_(matched_ids), PriceObservation.observed_at >= since)
             .order_by(Product.name, PriceObservation.observed_at)
+            # Full-catalog crawls now put thousands of products behind one
+            # competitor — capped so a broad query can't return an
+            # unbounded result set.
+            .limit(200)
         )
         rows = (await session.execute(stmt)).all()
 
@@ -203,9 +224,18 @@ async def search_campaigns(competitor: str, product_query: str = "") -> str:
 
         stmt = select(Campaign).where(Campaign.competitor_id == competitor_row.id)
         if product_query:
-            stmt = stmt.join(Product, Product.id == Campaign.product_id, isouter=True).where(
-                Product.name.ilike(f"%{product_query}%")
-            )
+            # Same bidirectional keyword-overlap match as query_price_history
+            # (see its comment / app/intelligence/text.py) — fetch this
+            # competitor's products first so a query like "workbench" can
+            # still match a product named "Cedar Potting Bench".
+            keywords = significant_keywords(product_query)
+            candidates = (
+                await session.execute(select(Product).where(Product.competitor_id == competitor_row.id))
+            ).scalars().all()
+            matched_ids = [p.id for p in candidates if name_matches_query(p.name, keywords)]
+            if not matched_ids:
+                return "No matching campaigns found."
+            stmt = stmt.where(Campaign.product_id.in_(matched_ids))
         stmt = stmt.order_by(Campaign.discovered_at.desc()).limit(20)
         campaign_rows = (await session.execute(stmt)).scalars().all()
 

@@ -1,23 +1,15 @@
-import re
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.intelligence.text import significant_keywords as _significant_keywords
 from app.models import Campaign, Competitor, PriceObservation, Product
 from app.schemas.campaign import CampaignRead
 from app.schemas.comparable import ComparableProduct
 from app.schemas.product import ProductRead
 
 router = APIRouter(prefix="/products", tags=["products"])
-
-_STOPWORDS = {"the", "and", "of", "for", "with", "our", "your", "in", "on", "is", "are"}
-
-
-def _significant_keywords(name: str) -> list[str]:
-    words = re.findall(r"[a-zA-Z0-9]+", name.lower())
-    return [w for w in words if len(w) > 2 and w not in _STOPWORDS]
 
 
 async def _search_by_keywords(
