@@ -13,6 +13,7 @@ from langchain_anthropic import ChatAnthropic
 from langgraph.prebuilt import create_react_agent
 
 from app.agent.tools import (
+    compare_assortment,
     query_price_history,
     save_campaign,
     save_development,
@@ -42,7 +43,15 @@ lack access to our own data; it is queried the same way.
 Use query_price_history, search_developments, and search_campaigns to check what's already known before
 answering. Use web_search only when the recorded data is thin or stale. Always cite the specific data (prices,
 dates, sources) that grounds your answer — never answer from general knowledge alone when competitor-specific
-data is being asked about."""
+data is being asked about.
+
+For raised-bed / elevated-planter market questions specifically (assortment gaps, material or price
+positioning, "how do we compare on raised beds"), use compare_assortment instead — it's grounded in the
+raised-bed workbench tracking Gardener's Supply, Epic Gardening, and Vego Garden. For this one workbench,
+"us"/"our own" means competitor="gardeners-supply" (not "gurneys") — Gardener's Supply is the own-brand
+identity this specific comparison is scoped to. Every number compare_assortment returns is a database fact;
+clearly separate that from any interpretation you add on top (e.g. "Epic has no cedar options" is a fact,
+"this may indicate a gap worth investigating" is your read on it — never blur the two)."""
 
 SWOT_SYSTEM_PROMPT = """You are a competitive analysis specialist producing a SWOT analysis for a
 horticultural-industry competitor (or, if asked about "us"/"our own"/Gardens Alive, for competitor="gurneys"
@@ -94,7 +103,7 @@ def _agent(system_prompt: str, tools: list, *, model_name: str = SUBAGENT_MODEL)
 
 GENERAL_AGENT = _agent(
     GENERAL_SYSTEM_PROMPT,
-    [query_price_history, search_developments, search_campaigns, web_search],
+    [query_price_history, search_developments, search_campaigns, web_search, compare_assortment],
     model_name=FAST_SUBAGENT_MODEL,
 )
 SWOT_AGENT = _agent(

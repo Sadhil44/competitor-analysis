@@ -16,6 +16,8 @@ from sqlalchemy import func, or_, select
 
 from app.agent.embeddings import embed_text
 from app.db.session import async_session_factory
+from app.intelligence import RAISED_BED_TYPES, WORKBENCH_SLUGS
+from app.intelligence.matching import find_comparables
 from app.models import Campaign, Competitor, Development, PriceObservation, Product, SWOTAnalysis
 
 SAVE_MODEL = "claude-sonnet-5"
@@ -295,3 +297,101 @@ async def web_search(query: str) -> str:
                     lines.append(f"- {title or url}: {url}")
 
     return "\n".join(lines) if lines else "No results found."
+
+
+async def _raised_bed_products(session, competitor_id: int) -> list[Product]:
+    result = await session.execute(
+        select(Product).where(
+            Product.competitor_id == competitor_id,
+            Product.attributes["product_type"].astext.in_(RAISED_BED_TYPES),
+        )
+    )
+    return list(result.scalars().all())
+
+
+@tool
+async def compare_assortment(focus_product_name: str = "") -> str:
+    """Compares Gardener's Supply's raised-bed/elevated-planter assortment
+    against Epic Gardening and Vego Garden — the three brands the raised-bed
+    workbench tracks (see /market/raised-beds). Returns, per brand: how many
+    raised-bed-family SKUs are recorded, their material/height/form
+    breakdown, and median price — grounded entirely in recorded crawl data,
+    no web search. Pass focus_product_name (e.g. a Gardener's Supply product
+    name) to additionally get its best cross-brand comparable matches with a
+    score breakdown (via app/intelligence/matching.py); leave blank for just
+    the portfolio-level comparison.
+    """
+    async with async_session_factory() as session:
+        result = await session.execute(select(Competitor).where(Competitor.slug.in_(WORKBENCH_SLUGS)))
+        competitors = {c.slug: c for c in result.scalars().all()}
+        if not competitors:
+            return "The raised-bed workbench competitors haven't been crawled yet."
+
+        lines = []
+        all_products: dict[str, list[Product]] = {}
+        for slug in WORKBENCH_SLUGS:
+            competitor = competitors.get(slug)
+            if competitor is None:
+                continue
+            products = await _raised_bed_products(session, competitor.id)
+            all_products[slug] = products
+
+            by_material: dict[str, int] = {}
+            by_height: dict[str, int] = {}
+            for p in products:
+                material = p.attributes.get("material")
+                height_band = p.attributes.get("height_band")
+                if material:
+                    by_material[material] = by_material.get(material, 0) + 1
+                if height_band:
+                    by_height[height_band] = by_height.get(height_band, 0) + 1
+
+            prices = []
+            for p in products:
+                obs = (
+                    await session.execute(
+                        select(PriceObservation)
+                        .where(PriceObservation.product_id == p.id)
+                        .order_by(PriceObservation.observed_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if obs and obs.price is not None:
+                    prices.append(obs.price)
+            median_price = sorted(prices)[len(prices) // 2] if prices else None
+
+            material_summary = ", ".join(f"{k}={v}" for k, v in sorted(by_material.items(), key=lambda kv: -kv[1]))
+            height_summary = ", ".join(f"{k}={v}" for k, v in sorted(by_height.items(), key=lambda kv: -kv[1]))
+            lines.append(
+                f"{competitor.name} ({slug}): {len(products)} raised-bed/planter SKUs, "
+                f"median price {median_price if median_price is not None else 'unknown'}. "
+                f"Material breakdown: {material_summary or 'no data'}. "
+                f"Height breakdown: {height_summary or 'no data'}."
+            )
+
+        if focus_product_name:
+            target = None
+            for products in all_products.values():
+                for p in products:
+                    if focus_product_name.lower() in p.name.lower():
+                        target = p
+                        break
+                if target:
+                    break
+            if target is None:
+                lines.append(f"\nNo product matching {focus_product_name!r} found among these three brands.")
+            else:
+                candidates = [
+                    (p.id, p.attributes, p.name)
+                    for products in all_products.values()
+                    for p in products
+                ]
+                matches = find_comparables(target.id, target.attributes, target.name, candidates, limit=5)
+                lines.append(f"\nClosest matches to {target.name!r}:")
+                for m in matches:
+                    lines.append(
+                        f"  score={m.score} confidence={m.confidence} matched={m.matched_fields} "
+                        f"missing={m.missing_fields} product_id={m.product_id}"
+                    )
+
+        return "\n".join(lines)

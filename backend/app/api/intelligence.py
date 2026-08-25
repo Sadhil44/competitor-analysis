@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.intelligence import RAISED_BED_TYPES, WORKBENCH_SLUGS
 from app.intelligence.matching import find_comparables
 from app.models import Competitor, CrawlRun, PriceObservation, Product
 from app.schemas.intelligence import (
@@ -28,13 +29,6 @@ from app.schemas.intelligence import (
 )
 
 router = APIRouter(prefix="/intelligence/raised-beds", tags=["intelligence"])
-
-# The three competitors this workbench compares — see config/competitors.yaml
-# for their crawl targets; this is just which of the tracked competitors
-# this specific workbench is scoped to (each is crawled for its full
-# catalog, not only raised beds — see backend/scripts/crawl_demo_scope.py).
-WORKBENCH_SLUGS = ["gardeners-supply", "epic-gardening", "vego-garden"]
-RAISED_BED_TYPES = ("raised_bed", "elevated_planter")
 
 
 async def _in_scope_products(db: AsyncSession, competitor_id: int) -> list[Product]:
