@@ -79,6 +79,58 @@ competitors:
       catalog_urls:
         - "https://www.americanmeadows.com/collections/perennial-plants"
 
+  - slug: epic-gardening
+    name: "Epic Gardening"
+    website_url: "https://shop.epicgardening.com"
+    active: true
+    notes: >
+      Real competitor, added 2026-08-24 for the raised-bed workbench demo
+      (Wed Aug 26). Scope is deliberately narrow: catalog_urls points at the
+      raised-garden-beds collection only, and crawl_demo_scope.py runs
+      crawl_competitor(scoped=True) for this identity so ingestion stays
+      within that collection instead of walking the full site sitemap (see
+      app/scraping/ingest.py's scoped param).
+    crawl:
+      cadence_cron: "0 6 * * *"
+      rate_limit_seconds: 2
+      catalog_urls:
+        - "https://shop.epicgardening.com/collections/raised-garden-beds"
+
+  - slug: vego-garden
+    name: "Vego Garden"
+    website_url: "https://www.vegogarden.com"
+    active: true
+    notes: >
+      Real competitor, added 2026-08-24 for the raised-bed workbench demo
+      (Wed Aug 26). Same scoped-crawl treatment as epic-gardening above —
+      catalog_urls is the garden-beds collection only.
+    crawl:
+      cadence_cron: "0 6 * * *"
+      rate_limit_seconds: 2
+      catalog_urls:
+        - "https://www.vegogarden.com/collections/garden-beds"
+
+  - slug: gardeners-supply
+    name: "Gardener's Supply Company"
+    website_url: "https://www.gardeners.com"
+    active: true
+    notes: >
+      Added 2026-08-24 for the raised-bed workbench demo (Wed Aug 26) —
+      this is OUR OWN brand (already is_own_brand=true via brand_num 53 in
+      config/own_brands.yaml, matched by slug the same way `gurneys` below
+      is dual-listed), but until now it only had internal-feed pricing, no
+      scraped website data. Adding it here gets it the same scraped
+      product/price coverage as any competitor, scoped to the raised-bed
+      collection so it's directly comparable to epic-gardening/vego-garden
+      above. Does not affect its existing internal-feed data (source=
+      "internal_feed" vs. "scheduled_crawl" stay distinguishable on
+      PriceObservation).
+    crawl:
+      cadence_cron: "0 6 * * *"
+      rate_limit_seconds: 2
+      catalog_urls:
+        - "https://www.gardeners.com/collections/raised-garden-beds"
+
   - slug: gurneys
     name: "Gurney's (parent brand of Gardens Alive — us)"
     website_url: "https://www.gurneys.com"

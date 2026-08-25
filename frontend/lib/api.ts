@@ -180,6 +180,92 @@ export async function getComparableProducts(productId: number): Promise<Comparab
   return (await apiFetch<ComparableProduct[]>(`/products/${productId}/comparable`)) ?? [];
 }
 
+// --- Raised-bed workbench (backend/app/api/intelligence.py) ---
+// Scoped to the three demo competitors and gated to attributes.product_type
+// in (raised_bed, elevated_planter) — see backend/app/intelligence/.
+
+export interface BrandSummary {
+  competitor_slug: string;
+  competitor_name: string;
+  is_own_brand: boolean;
+  product_count: number;
+  median_price: string | null;
+  promo_share: number;
+  in_stock_share: number;
+  last_crawled_at: string | null;
+  last_crawl_status: string | null;
+  pages_fetched: number | null;
+}
+
+export interface RaisedBedSummary {
+  generated_at: string;
+  scope_note: string;
+  brands: BrandSummary[];
+}
+
+export interface MatrixCell {
+  competitor_slug: string;
+  material: string;
+  height_band: string;
+  form: string;
+  count: number;
+}
+
+export interface RaisedBedMatrix {
+  cells: MatrixCell[];
+  excluded_incomplete_count: number;
+}
+
+export interface ComparableMatch {
+  product_id: number;
+  name: string;
+  url: string;
+  competitor_slug: string;
+  competitor_name: string;
+  latest_price: string | null;
+  currency: string | null;
+  score: number;
+  confidence: "high" | "medium" | "low";
+  matched_fields: string[];
+  missing_fields: string[];
+}
+
+export async function getRaisedBedSummary(): Promise<RaisedBedSummary | null> {
+  return apiFetch<RaisedBedSummary>("/intelligence/raised-beds/summary");
+}
+
+export interface RaisedBedProduct {
+  id: number;
+  name: string;
+  url: string;
+  latest_price: string | null;
+  currency: string | null;
+  in_stock: boolean | null;
+  material: string | null;
+  height_band: string | null;
+  form: string | null;
+  footprint: string | null;
+}
+
+export async function getRaisedBedProducts(competitorSlug: string): Promise<RaisedBedProduct[]> {
+  return (
+    (await apiFetch<RaisedBedProduct[]>(
+      `/intelligence/raised-beds/products?competitor_slug=${encodeURIComponent(competitorSlug)}`
+    )) ?? []
+  );
+}
+
+export async function getRaisedBedMatrix(): Promise<RaisedBedMatrix | null> {
+  return apiFetch<RaisedBedMatrix>("/intelligence/raised-beds/matrix");
+}
+
+export async function getRaisedBedComparables(productId: number, limit = 10): Promise<ComparableMatch[]> {
+  return (
+    (await apiFetch<ComparableMatch[]>(`/intelligence/raised-beds/comparables?product_id=${productId}&limit=${limit}`)) ??
+    []
+  );
+}
+
 export interface ActivityItem {
   kind: "campaign" | "development";
   id: number;

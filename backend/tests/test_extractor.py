@@ -49,6 +49,16 @@ class TestParsePriceValue:
     def test_none_input_returns_none(self):
         assert _parse_price_value(None) is None
 
+    def test_unit_price_prefix_does_not_shadow_real_price(self):
+        # Regression: Shopify's unit-price convention renders a product
+        # card's price block as one concatenated string like this — a bare
+        # first-digit-sequence search finds "1" (from "1 for") before it
+        # ever reaches the real price. Found live on gardeners.com.
+        assert _parse_price_value("1 for$149.99Unit price/per") == Decimal("149.99")
+
+    def test_price_range_uses_first_symbol_anchored_price(self):
+        assert _parse_price_value("$19.99 - $29.99") == Decimal("19.99")
+
 
 class TestParseAvailability:
     def test_in_stock_schema_url(self):

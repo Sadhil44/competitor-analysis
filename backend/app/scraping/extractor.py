@@ -26,6 +26,7 @@ from urllib.parse import urljoin
 from anthropic import AsyncAnthropic
 from bs4 import BeautifulSoup
 
+from app.intelligence.normalizer import fill_missing_attributes
 from app.schemas.extraction import ExtractedProduct, ExtractedProductList
 from app.scraping.fetcher import FetchedPage
 from app.scraping.jsonld import extract_jsonld_blocks, iter_jsonld_nodes, node_types
@@ -37,6 +38,14 @@ client = AsyncAnthropic()
 EXTRACTION_MODEL = "claude-haiku-4-5"
 
 _PRICE_PATTERN = re.compile(r"\d[\d,]*\.?\d*")
+# A number immediately preceded by a currency symbol — checked first,
+# before the bare-digit fallback below. Needed because generic HTML price
+# elements are sometimes a whole price-block's concatenated text, not just
+# the price (e.g. Shopify's unit-price convention renders as literally
+# "1 for$149.99Unit price/per" in one element — a bare-digit search finds
+# "1" before it ever reaches "149.99"). A currency symbol is what actually
+# marks a number as *the price* in cluttered text like that.
+_PRICE_WITH_SYMBOL_PATTERN = re.compile(r"[$£€]\s*(\d[\d,]*\.?\d*)")
 _OUT_OF_STOCK_AVAILABILITY = {"outofstock", "soldout", "discontinued"}
 
 
@@ -49,11 +58,16 @@ def _parse_price_value(value: object) -> Decimal | None:
     if isinstance(value, (int, float)):
         return Decimal(str(value))
     if isinstance(value, str):
-        match = _PRICE_PATTERN.search(value.replace(",", ""))
-        if not match:
+        cleaned = value.replace(",", "")
+        symbol_match = _PRICE_WITH_SYMBOL_PATTERN.search(cleaned)
+        text = symbol_match.group(1) if symbol_match else None
+        if text is None:
+            bare_match = _PRICE_PATTERN.search(cleaned)
+            text = bare_match.group() if bare_match else None
+        if text is None:
             return None
         try:
-            return Decimal(match.group())
+            return Decimal(text)
         except InvalidOperation:
             return None
     return None
@@ -102,6 +116,30 @@ def _parse_offer(offer: object) -> tuple[Decimal | None, str | None, bool]:
     return price, currency, in_stock
 
 
+def _extract_additional_properties(value: object) -> dict[str, str]:
+    """schema.org Product.additionalProperty — a list of PropertyValue nodes
+    ({"name": "Material", "value": "Cedar"}) that sites use to encode
+    structured attributes like material/dimensions. Not all sites populate
+    this, but when they do it's a stronger signal than parsing the title
+    (see app/intelligence/normalizer.py, which fills gaps this misses).
+    Keys are lowercased+underscored so they line up with the normalizer's
+    own key names (e.g. "Height" -> "height").
+    """
+    if not isinstance(value, list):
+        return {}
+    attributes: dict[str, str] = {}
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        prop_name = entry.get("name")
+        prop_value = entry.get("value")
+        if isinstance(prop_name, str) and isinstance(prop_value, (str, int, float)):
+            key = prop_name.strip().lower().replace(" ", "_")
+            if key:
+                attributes[key] = str(prop_value).strip()
+    return attributes
+
+
 def _product_from_jsonld_node(node: dict, page_url: str) -> ExtractedProduct | None:
     name = node.get("name")
     if not isinstance(name, str) or not name.strip():
@@ -122,6 +160,7 @@ def _product_from_jsonld_node(node: dict, page_url: str) -> ExtractedProduct | N
         description=description,
         image_url=_extract_image(node.get("image")),
         url=urljoin(page_url, url),
+        attributes=_extract_additional_properties(node.get("additionalProperty")),
         source="jsonld",
     )
 
@@ -444,6 +483,20 @@ async def _extract_products_llm_merged(page_text: str, passes: int = EXTRACTION_
     return ExtractedProductList(products=list(merged.values()))
 
 
+def _finalize(products: list[ExtractedProduct]) -> ExtractedProductList:
+    """Common exit point for every extraction path: fills any comparison
+    attributes (material/height/form/...) a deterministic source didn't
+    already state by parsing the product's own name/description text (see
+    app/intelligence/normalizer.py) — applied regardless of which
+    extraction source found the product, including the LLM fallback.
+    """
+    filled = [
+        item.model_copy(update={"attributes": fill_missing_attributes(item.attributes, item.name, item.description or "")})
+        for item in products
+    ]
+    return ExtractedProductList(products=filled)
+
+
 async def extract_products_merged(fetched: FetchedPage, *, competitor_slug: str | None = None) -> ExtractedProductList:
     """Top-level entry point for the extraction stage: try deterministic
     sources in priority order, falling back to the multi-pass LLM
@@ -463,7 +516,7 @@ async def extract_products_merged(fetched: FetchedPage, *, competitor_slug: str 
                 logger.info(
                     "extraction source=%s count=%d url=%s", source_name, len(products), fetched.url
                 )
-                return ExtractedProductList(products=products)
+                return _finalize(products)
 
         generic = _extract_from_generic_html(soup, fetched.url)
         priced = [p for p in generic if p.price is not None]
@@ -474,7 +527,8 @@ async def extract_products_merged(fetched: FetchedPage, *, competitor_slug: str 
         # useful instead of falling through to the LLM.
         if generic and len(priced) >= max(1, len(generic) // 2):
             logger.info("extraction source=generic_html count=%d url=%s", len(generic), fetched.url)
-            return ExtractedProductList(products=generic)
+            return _finalize(generic)
 
     logger.info("extraction falling back to LLM url=%s", fetched.url)
-    return await _extract_products_llm_merged(fetched.text)
+    llm_result = await _extract_products_llm_merged(fetched.text)
+    return _finalize(llm_result.products)

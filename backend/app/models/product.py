@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -31,6 +32,20 @@ class Product(Base):
     grade: Mapped[str | None] = mapped_column(String(100), default=None)
     category: Mapped[str] = mapped_column(String(255), default="")
     url: Mapped[str] = mapped_column(Text)
+    # brand/description/image_url mirror ExtractedProduct's own top-level
+    # fields (app/schemas/extraction.py) — extracted by the scraper from day
+    # one but never persisted until now (see app/scraping/ingest.py).
+    brand: Mapped[str | None] = mapped_column(String(255), default=None)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    image_url: Mapped[str | None] = mapped_column(Text, default=None)
+    # Free-form comparison attributes (material, height/depth, form,
+    # configuration, bundle_qty, features, claims, price_basis, ...) — one
+    # flexible JSONB column rather than a rigid column per attribute, since
+    # which attributes matter is category-specific (raised beds care about
+    # material/height; a different category would care about different
+    # things) and this stays small enough per-product for in-Python scoring
+    # (see app/intelligence/matching.py) rather than needing JSONB queries.
+    attributes: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     first_seen_at: Mapped[datetime] = mapped_column(server_default=func.now())
     last_seen_at: Mapped[datetime] = mapped_column(server_default=func.now())
 

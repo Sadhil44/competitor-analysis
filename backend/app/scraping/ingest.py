@@ -112,6 +112,10 @@ async def _find_or_create_product(
             name=item.name,
             url=url,
             category=item.category or "",
+            brand=item.brand,
+            description=item.description,
+            image_url=item.image_url,
+            attributes=dict(item.attributes),
         )
 
     # Existing row: refresh what's mutable, fill in what was previously
@@ -123,6 +127,23 @@ async def _find_or_create_product(
         product.sku = item.sku
     if url:
         product.url = url
+    if item.brand and not product.brand:
+        product.brand = item.brand
+    if item.description and not product.description:
+        product.description = item.description
+    if item.image_url and not product.image_url:
+        product.image_url = item.image_url
+    if item.attributes:
+        # Per-key fill-when-missing, not a whole-dict overwrite — a later
+        # crawl that only found e.g. `material` shouldn't erase a `height`
+        # value a JSON-LD pass found earlier. Mutate a fresh dict rather
+        # than product.attributes in place so SQLAlchemy's change-tracking
+        # on the JSONB column actually notices the update.
+        merged = dict(product.attributes)
+        for key, value in item.attributes.items():
+            if value and not merged.get(key):
+                merged[key] = value
+        product.attributes = merged
     return product
 
 
@@ -300,13 +321,25 @@ async def _find_competitor_config(slug: str) -> CompetitorConfig:
     raise ValueError(f"No config/competitors.yaml entry for competitor slug: {slug!r}")
 
 
-async def crawl_competitor(session: AsyncSession, competitor_slug: str) -> CrawlRun:
+async def crawl_competitor(session: AsyncSession, competitor_slug: str, *, scoped: bool = False) -> CrawlRun:
     """Full pipeline for one competitor: discover URLs from its configured
     website_url/catalog_urls (see app/scraping/discovery.py), fetch and
     extract each, persist Products/PriceObservations/Campaigns, and record
     a CrawlRun. A failure fetching or processing any single URL is caught
     and logged into the CrawlRun's error_log, not raised — one bad page
     must not abort the whole competitor's crawl.
+
+    `scoped=True` skips discover_urls() entirely and crawls only the
+    configured catalog_urls — for a competitor whose catalog_urls is a
+    single collection (e.g. "raised garden beds") rather than "everything."
+    This isn't just about the site-wide sitemap *product* union: discover_urls'
+    `category_urls` is every /collections/-shaped URL the site's sitemap
+    contains, not just the configured one, so without this branch the
+    category loop below would crawl up to MAX_CATEGORY_URLS_PER_CRAWL
+    unrelated categories too (confirmed live — gardeners.com's sitemap
+    surfaced 561 category URLs from one catalog_urls entry). Also skips the
+    expensive sitemap walk + per-URL page-signal classification discover_urls
+    does for its own sake, which scoped crawls have no use for.
     """
     result = await session.execute(select(Competitor).where(Competitor.slug == competitor_slug))
     competitor = result.scalar_one_or_none()
@@ -331,24 +364,34 @@ async def crawl_competitor(session: AsyncSession, competitor_slug: str) -> Crawl
     campaigns_found = 0
 
     try:
-        discovered = await discover_urls(
-            config.website_url, config.crawl.catalog_urls, rate_limit_seconds=config.crawl.rate_limit_seconds
-        )
-        logger.info(
-            "discovery competitor=%s products=%d categories=%d promos=%d unknown=%d",
-            competitor_slug,
-            len(discovered.product_urls),
-            len(discovered.category_urls),
-            len(discovered.promotional_urls),
-            len(discovered.unknown_urls),
-        )
+        if scoped:
+            discovered = None
+            category_urls_to_crawl = list(config.crawl.catalog_urls)[:MAX_CATEGORY_URLS_PER_CRAWL]
+            logger.info(
+                "scoped crawl competitor=%s catalog_urls=%d (skipping site-wide discovery)",
+                competitor_slug,
+                len(category_urls_to_crawl),
+            )
+        else:
+            discovered = await discover_urls(
+                config.website_url, config.crawl.catalog_urls, rate_limit_seconds=config.crawl.rate_limit_seconds
+            )
+            logger.info(
+                "discovery competitor=%s products=%d categories=%d promos=%d unknown=%d",
+                competitor_slug,
+                len(discovered.product_urls),
+                len(discovered.category_urls),
+                len(discovered.promotional_urls),
+                len(discovered.unknown_urls),
+            )
+            category_urls_to_crawl = list(discovered.category_urls)[:MAX_CATEGORY_URLS_PER_CRAWL]
 
         # Category/listing pages: fetch + extract + follow pagination via
         # the existing ingest_page loop, which also runs campaign detection
         # and collects product-detail links on every page (including
         # paginated ones) it visits.
         category_product_urls: set[str] = set()
-        for category_url in list(discovered.category_urls)[:MAX_CATEGORY_URLS_PER_CRAWL]:
+        for category_url in category_urls_to_crawl:
             try:
                 page_result = await ingest_page(session, competitor_slug, category_url)
                 campaigns_found += page_result.campaigns_found
@@ -362,19 +405,23 @@ async def crawl_competitor(session: AsyncSession, competitor_slug: str) -> Crawl
                 # take down every URL processed after it, not just itself.
                 await session.rollback()
 
-        # Individual product-detail pages: the union of links found on the
-        # crawled category page(s) and the site-wide sitemap — tracking
-        # scope is a competitor's full catalog, so both signals are used
-        # together rather than one being a fallback for the other (the
+        # Individual product-detail pages. Normally the union of links found
+        # on the crawled category page(s) and the site-wide sitemap —
+        # tracking scope is a competitor's full catalog, so both signals are
+        # used together rather than one being a fallback for the other (the
         # sitemap may miss products a category listing links to and vice
-        # versa).
-        product_url_source = category_product_urls | discovered.product_urls
+        # versa). When scoped=True, there's no sitemap-wide pass at all
+        # (discovered is None) — category_product_urls, already scoped to
+        # catalog_urls, is the only source.
+        sitemap_product_urls = discovered.product_urls if discovered else set()
+        product_url_source = category_product_urls if scoped else category_product_urls | sitemap_product_urls
         logger.info(
-            "product URLs for competitor=%s: %d from category pages, %d from sitemap, %d combined",
+            "product URLs for competitor=%s: %d from category pages, %d from sitemap, %d combined (scoped=%s)",
             competitor_slug,
             len(category_product_urls),
-            len(discovered.product_urls),
+            len(sitemap_product_urls),
             len(product_url_source),
+            scoped,
         )
 
         for product_url in list(product_url_source)[:MAX_PRODUCT_URLS_PER_CRAWL]:
@@ -391,8 +438,11 @@ async def crawl_competitor(session: AsyncSession, competitor_slug: str) -> Crawl
                 await session.rollback()
 
         # Promotional/sale landing pages: campaign detection only — these
-        # pages are marketing copy, not clean product listings.
-        for promo_url in list(discovered.promotional_urls)[:MAX_PROMOTIONAL_URLS_PER_CRAWL]:
+        # pages are marketing copy, not clean product listings. Only
+        # meaningful when full discovery ran (scoped crawls skip it — see
+        # above); the homepage banner check just below still runs either
+        # way, so a scoped crawl isn't blind to sitewide promos entirely.
+        for promo_url in list(discovered.promotional_urls)[:MAX_PROMOTIONAL_URLS_PER_CRAWL] if discovered else []:
             try:
                 fetched = await fetch_page(promo_url, rate_limit_seconds=config.crawl.rate_limit_seconds)
                 pages_fetched += 1
