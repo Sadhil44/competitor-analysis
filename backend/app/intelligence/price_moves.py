@@ -1,0 +1,152 @@
+"""Cross-competitor price-move detection — shared by the agent's
+list_recent_price_changes tool (app/agent/tools/__init__.py) and the
+/activity/price-changes API endpoint (app/api/activity.py) so the two
+surfaces (chat and dashboard) can never silently disagree about what counts
+as a real price move.
+
+Compares each product's earliest vs. latest recorded price within a window,
+across every tracked company at once (not scoped to one competitor).
+"""
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+from sqlalchemy import func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Competitor, PriceObservation, Product
+
+# Nothing in this catalog is realistically priced under $3 — guards against a
+# stray placeholder/error price (e.g. a $1 "notify me" or misextracted
+# variant price) reading as a real, dramatic move. See app/scraping/
+# ingest.py's _find_or_create_product docstring for the corruption pattern
+# this was written to protect against downstream of.
+PRICE_FLOOR = Decimal("3.00")
+
+# A real sale/promotion in this catalog is realistically well under 100% —
+# a move past this is far more likely two genuinely different products/
+# variants merged under one Product row (confirmed live and widespread: e.g.
+# same-named different-size nursery stock — a small vs. a mature plant, or a
+# 1-gallon vs. a multi-gallon size tier — sharing no SKU on the source site,
+# so even the ingest fix above can't separate them) than an actual price
+# change. Deliberately conservative (not just "large enough to catch the
+# worst cases"): surfacing "Product X's price jumped 240%" live to the exact
+# audience this data is about would be actively misleading, not just noisy,
+# so this filters generously rather than just deprioritizing the extreme
+# tail. This is a real known gap (plant/nursery catalogs routinely reuse one
+# display name across size/quantity tiers with no distinguishing SKU) that a
+# threshold can only mask, not fix — see the project handoff notes.
+MAX_PLAUSIBLE_PCT_CHANGE = 75.0
+
+
+@dataclass
+class PriceMove:
+    product_id: int
+    product_name: str
+    product_url: str
+    competitor_slug: str
+    competitor_name: str
+    is_own_brand: bool
+    first_price: Decimal
+    last_price: Decimal
+    pct_change: float
+    currency: str
+
+
+async def find_price_moves(
+    session: AsyncSession, *, days: int = 14, min_pct_change: float = 5.0, limit: int = 20
+) -> list[PriceMove]:
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+
+    rn_first = func.row_number().over(
+        partition_by=PriceObservation.product_id, order_by=PriceObservation.observed_at.asc()
+    ).label("rn_first")
+    rn_last = func.row_number().over(
+        partition_by=PriceObservation.product_id, order_by=PriceObservation.observed_at.desc()
+    ).label("rn_last")
+    subq = (
+        select(
+            PriceObservation.product_id,
+            PriceObservation.price,
+            PriceObservation.currency,
+            PriceObservation.observed_at,
+            rn_first,
+            rn_last,
+        )
+        .where(PriceObservation.observed_at >= since, PriceObservation.price.is_not(None))
+        .subquery()
+    )
+    endpoint_rows = (
+        await session.execute(select(subq).where(or_(subq.c.rn_first == 1, subq.c.rn_last == 1)))
+    ).all()
+
+    by_product: dict[int, dict] = {}
+    for row in endpoint_rows:
+        entry = by_product.setdefault(row.product_id, {})
+        if row.rn_first == 1:
+            entry["first_price"] = row.price
+            entry["first_at"] = row.observed_at
+            entry["first_currency"] = row.currency
+        if row.rn_last == 1:
+            entry["last_price"] = row.price
+            entry["last_at"] = row.observed_at
+            entry["currency"] = row.currency
+
+    candidates: list[tuple[int, Decimal, Decimal, float, str]] = []
+    for product_id, entry in by_product.items():
+        first_price, last_price = entry.get("first_price"), entry.get("last_price")
+        if first_price is None or last_price is None or entry.get("first_at") == entry.get("last_at"):
+            continue
+        if first_price < PRICE_FLOOR or last_price < PRICE_FLOOR:
+            continue
+        # A product crawled under more than one regional storefront variant
+        # (confirmed live: Vego Garden's en-ca pages price in CAD alongside
+        # its USD default) can have differently-currencied observations on
+        # the SAME product row — a delta across currencies isn't a price
+        # move at all, just unit-mismatched noise.
+        if entry.get("first_currency") and entry.get("first_currency") != entry.get("currency"):
+            continue
+        pct = float((last_price - first_price) / first_price * 100)
+        if abs(pct) > MAX_PLAUSIBLE_PCT_CHANGE:
+            continue
+        if abs(pct) >= min_pct_change:
+            candidates.append((product_id, first_price, last_price, pct, entry.get("currency") or "USD"))
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda c: abs(c[3]), reverse=True)
+    candidates = candidates[:limit]
+
+    product_ids = [c[0] for c in candidates]
+    product_rows = (
+        await session.execute(
+            select(Product, Competitor)
+            .join(Competitor, Competitor.id == Product.competitor_id)
+            .where(Product.id.in_(product_ids))
+        )
+    ).all()
+    product_by_id = {p.id: (p, c) for p, c in product_rows}
+
+    moves = []
+    for product_id, first_price, last_price, pct, currency in candidates:
+        entry = product_by_id.get(product_id)
+        if entry is None:
+            continue
+        product, competitor = entry
+        moves.append(
+            PriceMove(
+                product_id=product.id,
+                product_name=product.name,
+                product_url=product.url,
+                competitor_slug=competitor.slug,
+                competitor_name=competitor.name,
+                is_own_brand=competitor.is_own_brand,
+                first_price=first_price,
+                last_price=last_price,
+                pct_change=pct,
+                currency=currency,
+            )
+        )
+    return moves

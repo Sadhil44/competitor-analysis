@@ -50,10 +50,15 @@ export default async function RaisedBedWorkbenchPage() {
   return (
     <div className="flex flex-col gap-10">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Raised-Bed Market Workbench</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Category Deep-Dive: Raised Beds</h1>
         <p className="mt-1 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
           Gardener&apos;s Supply vs. Epic Gardening and Vego Garden, scoped to raised beds and elevated planters —
           a deterministic snapshot, not a generated report.
+        </p>
+        <p className="mt-2 max-w-2xl text-xs text-zinc-500 dark:text-zinc-500">
+          This is one worked example of a category-level comparison the platform can run for any product
+          line — pricing, campaigns, and Q&amp;A elsewhere in the dashboard already cover every tracked
+          competitor&apos;s full catalog, not just this category.
         </p>
         <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-600">
           {summary.scope_note} Generated {new Date(summary.generated_at).toLocaleString()}.

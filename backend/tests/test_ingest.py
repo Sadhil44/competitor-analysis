@@ -4,17 +4,25 @@ mocked — these tests cover ingest_page's control flow (when it keeps
 paginating vs. stops), not real scraping or LLM extraction.
 """
 
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from app.models import Campaign, Product
+from app.models import Campaign, PriceObservation, Product
 from app.schemas.campaign import DetectedCampaign
 from app.scraping.extractor import ExtractedProduct, ExtractedProductList
 from app.scraping.fetcher import FetchedPage
-from app.scraping.ingest import _persist_campaign, _price_context_fingerprint, ingest_page
+from app.scraping.ingest import (
+    _dedupe_page_items,
+    _find_or_create_product,
+    _persist_campaign,
+    _price_context_fingerprint,
+    _select_own_page_item,
+    ingest_page,
+)
 
 
 class TestPriceContextFingerprint:
@@ -267,3 +275,176 @@ async def test_follows_real_multi_page_pagination(db_session, competitor):
 async def test_raises_for_unknown_competitor(db_session):
     with pytest.raises(ValueError):
         await ingest_page(db_session, "does-not-exist", "https://example.com")
+
+
+class TestFindOrCreateProduct:
+    """Regression coverage for a real data-corruption bug found live: two
+    different SKU-variant pages sharing near-identical rendered title text
+    (e.g. gardeners.com's per-variant "-vs-sku-NNNNN" product URLs) used to
+    get merged into ONE Product row, because a sku lookup that found nothing
+    (a genuinely new sku) fell through to a name-based lookup instead of
+    creating a new product — silently attaching an unrelated variant's price
+    to an existing product's history. See _find_or_create_product's
+    docstring for the full story.
+    """
+
+    async def test_new_sku_with_colliding_name_creates_a_separate_product(self, db_session, competitor):
+        existing = await _find_or_create_product(
+            db_session,
+            competitor.id,
+            ExtractedProduct(sku="sku-a", name="Cedar Raised Bed", price=999.99, currency="USD", in_stock=True),
+            fallback_url="https://acme.example/a",
+        )
+        db_session.add(existing)
+        await db_session.flush()
+
+        other_variant = await _find_or_create_product(
+            db_session,
+            competitor.id,
+            ExtractedProduct(sku="sku-b", name="Cedar Raised Bed", price=1.00, currency="USD", in_stock=True),
+            fallback_url="https://acme.example/b",
+        )
+
+        assert other_variant.id != existing.id
+
+    async def test_matching_sku_reuses_the_same_product(self, db_session, competitor):
+        existing = await _find_or_create_product(
+            db_session,
+            competitor.id,
+            ExtractedProduct(sku="sku-a", name="Cedar Raised Bed", price=999.99, currency="USD", in_stock=True),
+            fallback_url="https://acme.example/a",
+        )
+        db_session.add(existing)
+        await db_session.flush()
+
+        same_product_again = await _find_or_create_product(
+            db_session,
+            competitor.id,
+            ExtractedProduct(sku="sku-a", name="Cedar Raised Bed (Updated Title)", price=949.99, currency="USD", in_stock=True),
+            fallback_url="https://acme.example/a",
+        )
+
+        assert same_product_again.id == existing.id
+
+    async def test_no_sku_still_falls_back_to_name(self, db_session, competitor):
+        existing = await _find_or_create_product(
+            db_session,
+            competitor.id,
+            ExtractedProduct(sku=None, name="Cedar Raised Bed", price=999.99, currency="USD", in_stock=True),
+            fallback_url="https://acme.example/a",
+        )
+        db_session.add(existing)
+        await db_session.flush()
+
+        same_product_again = await _find_or_create_product(
+            db_session,
+            competitor.id,
+            ExtractedProduct(sku=None, name="Cedar Raised Bed", price=949.99, currency="USD", in_stock=True),
+            fallback_url="https://acme.example/a",
+        )
+
+        assert same_product_again.id == existing.id
+
+
+class TestDedupePageItems:
+    """Regression coverage for a page whose own extraction yields more than
+    one entry for what's really one product (e.g. a related-products
+    carousel embedding its own Product JSON-LD node) — these must collapse
+    to one, not persist as separate price observations on the same row.
+    """
+
+    def test_same_sku_collapses_to_one_preferring_priced(self):
+        items = [
+            ExtractedProduct(sku="sku-a", name="Widget", price=None, currency="USD", in_stock=True),
+            ExtractedProduct(sku="sku-a", name="Widget", price=19.99, currency="USD", in_stock=True),
+        ]
+        result = _dedupe_page_items(items)
+        assert len(result) == 1
+        assert result[0].price == Decimal("19.99")
+
+    def test_same_name_no_sku_collapses_to_one(self):
+        items = [
+            ExtractedProduct(sku=None, name="Widget", price=19.99, currency="USD", in_stock=True),
+            ExtractedProduct(sku=None, name="Widget", price=1.00, currency="USD", in_stock=True),
+        ]
+        result = _dedupe_page_items(items)
+        assert len(result) == 1
+        assert result[0].price == Decimal("19.99")
+
+    def test_distinct_identities_are_kept(self):
+        items = [
+            ExtractedProduct(sku="sku-a", name="Widget", price=19.99, currency="USD", in_stock=True),
+            ExtractedProduct(sku="sku-b", name="Gadget", price=29.99, currency="USD", in_stock=True),
+        ]
+        assert len(_dedupe_page_items(items)) == 2
+
+    async def test_prevents_duplicate_price_observations_via_ingest_page(self, db_session, competitor):
+        """End-to-end: a single fetched page yielding a duplicate-identity
+        item pair must only ever write ONE PriceObservation, not two — the
+        exact shape of the live bug (5 identical-timestamp rows on the same
+        product from one page's extraction).
+        """
+        with (
+            patch("app.scraping.ingest.fetch_page", new_callable=AsyncMock) as mock_fetch,
+            patch("app.scraping.ingest.extract_products_merged", new_callable=AsyncMock) as mock_extract,
+        ):
+            mock_fetch.return_value = _page(_page_text("$9.99", "aaaa"), None)
+            mock_extract.return_value = ExtractedProductList(
+                products=[
+                    ExtractedProduct(sku="sku-a", name="Widget", price=1.00, currency="USD", in_stock=True),
+                    ExtractedProduct(sku="sku-a", name="Widget", price=19.99, currency="USD", in_stock=True),
+                ]
+            )
+
+            await ingest_page(db_session, competitor.slug, "https://acme.example/catalog")
+
+        product = (
+            await db_session.execute(select(Product).where(Product.competitor_id == competitor.id))
+        ).scalar_one()
+        observations = (
+            await db_session.execute(select(PriceObservation).where(PriceObservation.product_id == product.id))
+        ).scalars().all()
+        # The real bug this guards against is two rows instead of one — which
+        # of the two colliding prices survives isn't itself meaningful here.
+        assert len(observations) == 1
+
+
+class TestSelectOwnPageItem:
+    """Regression coverage for a real, live bug: an individual product-page
+    visit expects extraction to return exactly one item (this page's own
+    product). Confirmed live on a vegogarden.com product page that had no
+    JSON-LD/microdata — extraction fell through to the LLM pass, which
+    returned 43 items pulled from an embedded catalog/nav rather than
+    isolating "the" product, none carrying their own url. Without this,
+    every one of those 43 unrelated products would have inherited this
+    one page's url via _find_or_create_product's fallback.
+    """
+
+    def test_single_item_passes_through_unchanged(self):
+        items = [ExtractedProduct(sku=None, name="Widget", price=9.99, currency="USD", in_stock=True)]
+        assert _select_own_page_item(items, "https://acme.example/products/widget") == items
+
+    def test_picks_the_item_best_matching_the_url_slug(self):
+        items = [
+            ExtractedProduct(sku=None, name="Garden Hose 50ft", price=29.99, currency="USD", in_stock=True),
+            ExtractedProduct(
+                sku=None,
+                name="Greenhouse Frost Cover & Trellis System",
+                price=99.95,
+                currency="USD",
+                in_stock=True,
+            ),
+            ExtractedProduct(sku=None, name="MaxGrow Tomato Tower", price=139.95, currency="USD", in_stock=True),
+        ]
+        result = _select_own_page_item(items, "https://vegogarden.com/products/ezcube-4-in-1-cover-and-trellis-system")
+        assert len(result) == 1
+        assert result[0].name == "Greenhouse Frost Cover & Trellis System"
+
+    def test_no_slug_keywords_falls_back_to_first_item(self):
+        items = [
+            ExtractedProduct(sku=None, name="Widget", price=9.99, currency="USD", in_stock=True),
+            ExtractedProduct(sku=None, name="Gadget", price=19.99, currency="USD", in_stock=True),
+        ]
+        # A numeric-only/too-short slug yields no significant keywords at all.
+        result = _select_own_page_item(items, "https://acme.example/products/12")
+        assert result == items[:1]

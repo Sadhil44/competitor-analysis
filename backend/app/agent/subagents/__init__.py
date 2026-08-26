@@ -14,6 +14,9 @@ from langgraph.prebuilt import create_react_agent
 
 from app.agent.tools import (
     compare_assortment,
+    list_recent_campaigns,
+    list_recent_developments,
+    list_recent_price_changes,
     query_price_history,
     save_campaign,
     save_development,
@@ -40,22 +43,45 @@ Gardens Alive's pricing, or comparisons involving "us", use query_price_history,
 search_campaigns with competitor="gurneys" — the exact same tools you'd use for any competitor. Do not say you
 lack access to our own data; it is queried the same way.
 
+A single product's raw price history can occasionally contain a data-extraction artifact — e.g. a price that
+swings by an implausible multiple (200%+) between two adjacent readings a day or two apart, or a placeholder-
+looking value like $1.00 — from two genuinely different product variants having been recorded under one name.
+A move that large this fast is far more likely bad data than a real pricing decision: never state it as a
+confident finding (e.g. "erratic pricing" or "a pricing weakness") — note the specific figures as observed, but
+flag the swing itself as a likely data artifact worth verifying against the live site rather than a business
+signal, if it's implausibly large. A normal sale/promo swing (single-digit to double-digit percent) is real and
+fine to report as-is.
+
 Use query_price_history, search_developments, and search_campaigns to check what's already known before
-answering. Use web_search only when the recorded data is thin or stale. Always cite the specific data (prices,
-dates, sources) that grounds your answer — never answer from general knowledge alone when competitor-specific
-data is being asked about.
+answering — but those three tools each require ONE specific company slug. The moment a question spans
+multiple companies, doesn't name one, or asks in aggregate — "who's running promotions right now", "any price
+drops recently", "what's changed across our competitors", "what's new" — do NOT guess a single slug and do NOT
+treat one empty single-company lookup as "no data exists". Use the cross-company tools instead:
+list_recent_campaigns, list_recent_developments, list_recent_price_changes — each of these already checks
+every tracked company at once and is grounded in the same recorded data. Only fall back to web_search when
+even the cross-company tools come back thin or stale for what's being asked. Always cite the specific data
+(prices, dates, company names) that grounds your answer — never answer from general knowledge alone when
+company-specific data is being asked about.
 
 For raised-bed / elevated-planter market questions specifically (assortment gaps, material or price
-positioning, "how do we compare on raised beds"), use compare_assortment instead — it's grounded in the
-raised-bed workbench tracking Gardener's Supply, Epic Gardening, and Vego Garden. For this one workbench,
-"us"/"our own" means competitor="gardeners-supply" (not "gurneys") — Gardener's Supply is the own-brand
-identity this specific comparison is scoped to. Every number compare_assortment returns is a database fact;
-clearly separate that from any interpretation you add on top (e.g. "Epic has no cedar options" is a fact,
-"this may indicate a gap worth investigating" is your read on it — never blur the two)."""
+positioning, "how do we compare on raised beds") — one worked example of a category deep-dive this platform
+can run for any product line — use compare_assortment instead — it's grounded in the raised-bed workbench
+tracking Gardener's Supply, Epic Gardening, and Vego Garden. For this one workbench, "us"/"our own" means
+competitor="gardeners-supply" (not "gurneys") — Gardener's Supply is the own-brand identity this specific
+comparison is scoped to. Every number compare_assortment returns is a database fact; clearly separate that
+from any interpretation you add on top (e.g. "Epic has no cedar options" is a fact, "this may indicate a gap
+worth investigating" is your read on it — never blur the two)."""
 
 SWOT_SYSTEM_PROMPT = """You are a competitive analysis specialist producing a SWOT analysis for a
 horticultural-industry competitor (or, if asked about "us"/"our own"/Gardens Alive, for competitor="gurneys"
 — queried the exact same way).
+
+A single product's raw price history can occasionally contain a data-extraction artifact — an implausible
+swing (200%+) between two readings a day or two apart, or a placeholder-looking value like $1.00 — from two
+genuinely different product variants having been recorded under one name, not a real pricing decision. Never
+write this up as a weakness/strength (e.g. "erratic pricing") — a swing that large that fast is far more
+likely bad data than strategy; a normal sale/promo swing (single- to double-digit percent) is real and fine
+to use.
 
 Steps:
 1. Use query_price_history to review the competitor's recent pricing behavior (trends, stock issues).
@@ -87,11 +113,19 @@ signals something structurally real (e.g. the donation is part of a stated susta
 the blog post announces an actual new product line). When in doubt, skip it rather than record noise — a
 shorter, higher-signal digest is more useful than an exhaustive one.
 
+If the request names ONE specific competitor, use search_developments/search_campaigns for that company. If
+it's a broad or multi-company digest request ("what's new across our competitors", "who's running promotions",
+"any recent price drops") — not scoped to a single named company — use list_recent_developments/
+list_recent_campaigns/list_recent_price_changes instead; do not guess a single competitor slug for a question
+that isn't actually about one.
+
 Steps:
-1. Use search_developments and search_campaigns to review what's already recorded for this competitor.
+1. Use search_developments/search_campaigns (one named competitor) or list_recent_developments/
+   list_recent_campaigns/list_recent_price_changes (broad/multi-company) to review what's already recorded.
 2. Use web_search to look for anything not yet recorded.
 3. Sort each real finding per the rule above and save it with save_development or save_campaign, with a
-   source url and a real date — do not fabricate either.
+   source url and a real date — do not fabricate either. Only save findings tied to one specific competitor;
+   a cross-company digest tool is for reviewing, not for something you'd save against.
 4. Finish with a short digest summarizing what's new, citing what you found and what you deliberately skipped
    as noise."""
 
@@ -103,7 +137,16 @@ def _agent(system_prompt: str, tools: list, *, model_name: str = SUBAGENT_MODEL)
 
 GENERAL_AGENT = _agent(
     GENERAL_SYSTEM_PROMPT,
-    [query_price_history, search_developments, search_campaigns, web_search, compare_assortment],
+    [
+        query_price_history,
+        search_developments,
+        search_campaigns,
+        list_recent_campaigns,
+        list_recent_developments,
+        list_recent_price_changes,
+        web_search,
+        compare_assortment,
+    ],
     model_name=FAST_SUBAGENT_MODEL,
 )
 SWOT_AGENT = _agent(
@@ -116,6 +159,9 @@ DEVELOPMENTS_AGENT = _agent(
         query_price_history,
         search_developments,
         search_campaigns,
+        list_recent_campaigns,
+        list_recent_developments,
+        list_recent_price_changes,
         web_search,
         save_development,
         save_campaign,

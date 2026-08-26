@@ -24,6 +24,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
+from app.core.config import load_own_brands_config
 from app.models import Competitor, PriceObservation, Product
 from app.scraping.feed_import import (
     _parse_price,
@@ -98,12 +99,17 @@ async def own_brand_competitor(competitor_factory) -> Competitor:
 async def test_seed_own_brands_is_idempotent(db_session):
     # Runs against the real config/own_brands.yaml — safe because
     # seed_own_brands is designed to be idempotent (match by slug, update
-    # in place), so this just reaffirms the real 7 rows rather than
-    # creating anything new.
+    # in place), so this just reaffirms one row per config entry rather
+    # than creating anything new. Derived from the config itself, not a
+    # hardcoded count, so this doesn't go stale every time an entry is
+    # added or removed (e.g. amazon-gardeners-fulfillment and
+    # gardeners-supply-retail were removed — channel/fulfillment variants
+    # of gardeners-supply, not independent brands worth tracking).
+    expected_count = len(load_own_brands_config())
     await seed_own_brands(db_session)
     result = await db_session.execute(select(Competitor).where(Competitor.is_own_brand))
     first_run_count = len(result.scalars().all())
-    assert first_run_count == 7  # one per brand_num entry in config/own_brands.yaml
+    assert first_run_count == expected_count
 
     await seed_own_brands(db_session)
     result = await db_session.execute(select(Competitor).where(Competitor.is_own_brand))

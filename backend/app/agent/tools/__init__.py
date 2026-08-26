@@ -18,6 +18,7 @@ from app.agent.embeddings import embed_text
 from app.db.session import async_session_factory
 from app.intelligence import RAISED_BED_TYPES, WORKBENCH_SLUGS
 from app.intelligence.matching import find_comparables
+from app.intelligence.price_moves import find_price_moves
 from app.intelligence.text import name_matches_query, significant_keywords
 from app.models import Campaign, Competitor, Development, PriceObservation, Product, SWOTAnalysis
 
@@ -291,6 +292,119 @@ async def save_campaign(
         await session.commit()
 
     return "Campaign saved."
+
+
+@tool
+async def list_recent_campaigns(product_query: str = "", days: int = 180, limit: int = 25) -> str:
+    """List recorded promotional campaigns (sales, discounts, marketing pushes) across ALL
+    tracked companies at once — every competitor AND our own brands — most recently
+    discovered first. Use this whenever a question spans multiple or unnamed companies
+    ("who's running promotions right now", "any sales on raised beds", "what's on sale this
+    week") — search_campaigns only checks ONE named company and will incorrectly look empty
+    for a question like this even when other tracked companies have real recorded campaigns.
+    Optionally filter by product_query (matched the same fuzzy way as search_campaigns).
+    """
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    async with async_session_factory() as session:
+        stmt = (
+            select(Campaign, Competitor, Product)
+            .join(Competitor, Competitor.id == Campaign.competitor_id)
+            .outerjoin(Product, Product.id == Campaign.product_id)
+            .where(Campaign.discovered_at >= since)
+            .order_by(Campaign.discovered_at.desc())
+            # Upper bound before Python-side product_query filtering below —
+            # cheap since the campaigns table is small relative to products.
+            .limit(500)
+        )
+        rows = (await session.execute(stmt)).all()
+
+    if product_query:
+        keywords = significant_keywords(product_query)
+        rows = [
+            (c, comp, p)
+            for c, comp, p in rows
+            if name_matches_query(f"{c.title} {p.name if p else ''}", keywords)
+        ]
+
+    rows = rows[:limit]
+    if not rows:
+        return "No matching campaigns found across any tracked company."
+
+    lines = []
+    for c, comp, p in rows:
+        window = ""
+        if c.starts_at or c.ends_at:
+            start = c.starts_at.date().isoformat() if c.starts_at else "?"
+            end = c.ends_at.date().isoformat() if c.ends_at else "?"
+            window = f" ({start} to {end})"
+        product_note = f" [{p.name}]" if p else ""
+        lines.append(f"{comp.name}: {c.title}{product_note} — {c.discount_text}{window}: {c.description}")
+    return "\n".join(lines)
+
+
+@tool
+async def list_recent_developments(query: str = "", days: int = 180, limit: int = 20) -> str:
+    """List recorded strategic/organizational developments (launches, funding, leadership
+    changes, major assortment shifts) across ALL tracked companies at once, most recent
+    first. Use this whenever a question spans multiple or unnamed companies ("what's new
+    across our competitors", "any recent competitor moves") — search_developments only
+    checks ONE named company and will incorrectly look empty for a question like this. Pass
+    query for a semantic filter (e.g. "funding" or "leadership changes"); leave it blank to
+    just get the most recent developments across everyone.
+    """
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    async with async_session_factory() as session:
+        if query:
+            query_vector = await embed_text(query, input_type="query")
+            stmt = (
+                select(Development, Competitor)
+                .join(Competitor, Competitor.id == Development.competitor_id)
+                .where(Development.event_date >= since)
+                .order_by(Development.embedding.cosine_distance(query_vector))
+                .limit(limit)
+            )
+        else:
+            stmt = (
+                select(Development, Competitor)
+                .join(Competitor, Competitor.id == Development.competitor_id)
+                .where(Development.event_date >= since)
+                .order_by(Development.event_date.desc())
+                .limit(limit)
+            )
+        rows = (await session.execute(stmt)).all()
+
+    if not rows:
+        return "No developments recorded across any tracked company in this window."
+
+    return "\n".join(
+        f"{comp.name} [{d.category}] {d.title} ({d.event_date.date().isoformat()}): {d.summary}"
+        for d, comp in rows
+    )
+
+
+@tool
+async def list_recent_price_changes(days: int = 14, min_pct_change: float = 5.0, limit: int = 20) -> str:
+    """Find products whose price moved meaningfully in the last N days, across ALL tracked
+    companies (competitors and our own brands) — use this for "who moved their prices",
+    "any price drops recently", "what changed this week" style questions that aren't about
+    one named company. Compares each product's earliest vs. latest recorded price within the
+    window and returns the largest moves first (up or down), at or above min_pct_change
+    percent. For one already-named company's price history instead, use query_price_history.
+    """
+    async with async_session_factory() as session:
+        moves = await find_price_moves(session, days=days, min_pct_change=min_pct_change, limit=limit)
+
+    if not moves:
+        return "No price moves at or above that threshold in this window."
+
+    lines = []
+    for m in moves:
+        direction = "up" if m.pct_change > 0 else "down"
+        lines.append(
+            f"{m.competitor_name}: {m.product_name} {direction} {abs(m.pct_change):.1f}% "
+            f"({m.first_price} → {m.last_price})"
+        )
+    return "\n".join(lines)
 
 
 @tool

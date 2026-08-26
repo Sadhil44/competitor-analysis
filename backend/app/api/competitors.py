@@ -75,11 +75,11 @@ async def get_competitor(slug: str, db: AsyncSession = Depends(get_db)):
 async def list_competitor_products(
     slug: str, response: Response, limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)
 ):
-    # Some own-brand competitors (e.g. gardeners-supply-retail) have 30K+
-    # products from the feed import, and the scraping pipeline now tracks
-    # a competitor's full catalog rather than one category — capped by
-    # default so this stays a cheap request; callers page through the rest
-    # via `offset`. Total count goes in a response header (X-Total-Count)
+    # Some own-brand competitors' feed imports carry 30K+ products on their
+    # own, and the scraping pipeline now tracks a competitor's full catalog
+    # rather than one category — capped by default so this stays a cheap
+    # request; callers page through the rest via `offset`. Total count goes
+    # in a response header (X-Total-Count)
     # rather than changing the response body shape, so existing callers
     # that just want `limit` products unpaginated are unaffected.
     result = await db.execute(select(Competitor).where(Competitor.slug == slug))

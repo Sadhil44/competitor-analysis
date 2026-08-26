@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import CompetitorConfig, load_competitors_config
 from app.models import Campaign, Competitor, CrawlRun, PriceObservation, Product
 from app.schemas.campaign import DetectedCampaign
+from app.intelligence.text import name_matches_query, significant_keywords
 from app.schemas.extraction import ExtractedProduct
 from app.scraping.campaigns import discover_campaigns
 from app.scraping.discovery import discover_urls, extract_product_links
@@ -74,6 +75,61 @@ def _price_context_fingerprint(text: str) -> str:
     return " ".join(text[max(0, s - PRICE_CONTEXT_WINDOW) : s + PRICE_CONTEXT_WINDOW] for s in spans)
 
 
+def _dedupe_page_items(items: list[ExtractedProduct]) -> list[ExtractedProduct]:
+    """Collapses multiple ExtractedProduct entries from a SINGLE fetched
+    page that identify the same real product — keyed by sku when present,
+    else by name — to one, preferring whichever has a non-null price (same
+    "prefer priced" convention as extract_products_merged's own multi-pass
+    dedup in app/scraping/extractor.py).
+
+    Without this, a page whose JSON-LD embeds more than one Product node
+    for what's really one item (seen live on gardeners.com product pages:
+    a "related products" carousel or per-swatch variant block emitting its
+    own Product node alongside the main one) persists every node as a
+    separate PriceObservation on the SAME Product row — silently corrupting
+    its price history with an unrelated item's price. This is a narrower,
+    additional guard alongside _find_or_create_product's sku-vs-name
+    matching fix above: that fix stops CROSS-page collisions from merging
+    distinct SKUs together; this stops a SINGLE page's own extraction from
+    doing the same thing to itself in one pass.
+    """
+    deduped: dict[str, ExtractedProduct] = {}
+    for item in items:
+        key = item.sku or item.name
+        existing = deduped.get(key)
+        if existing is None or (existing.price is None and item.price is not None):
+            deduped[key] = item
+    return list(deduped.values())
+
+
+def _select_own_page_item(items: list[ExtractedProduct], page_url: str) -> list[ExtractedProduct]:
+    """Individual product-page visits (crawl_competitor's per-product loop)
+    expect extraction to return exactly one item — the page's own product,
+    which then inherits page_url as its url via _find_or_create_product's
+    fallback (item.url or fallback_url). Confirmed live on a vegogarden.com
+    product page with no JSON-LD/microdata to extract deterministically:
+    extraction fell through to the LLM pass, which doesn't isolate "the"
+    product — it returned 43 items pulled from what was actually the site's
+    embedded catalog/nav, none carrying their own url (the LLM extraction
+    prompt never asks for one). Persisting all of them would silently
+    misattribute this one page's url to 42 unrelated real products.
+
+    When more than one item comes back, only one of them is genuinely this
+    page's own product — narrowed down to whichever has the most
+    significant words in common with the page URL's own slug, the best
+    signal available for "which one is actually this page." Falls through
+    unchanged when there's already just one item (the normal case).
+    """
+    if len(items) <= 1:
+        return items
+    slug = re.sub(r"[-_]", " ", page_url.rstrip("/").split("/")[-1])
+    slug_keywords = significant_keywords(slug)
+    if not slug_keywords:
+        return items[:1]
+    best = max(items, key=lambda item: sum(1 for kw in slug_keywords if name_matches_query(item.name, [kw])))
+    return [best]
+
+
 def _utcnow() -> datetime:
     # Product/Campaign/CrawlRun timestamp columns are naive-UTC (see the
     # migrations under app/db/migrations/versions) — matches the existing
@@ -87,10 +143,19 @@ async def _find_or_create_product(
 ) -> Product:
     """Find-or-create keyed by (competitor_id, sku) when the item has a
     sku — a stronger identity signal than name — falling back to the
-    existing (competitor_id, name) match (see app/models/product.py) when
-    it doesn't. Never both: a sku match short-circuits before the name
-    lookup runs, so a renamed listing with a stable sku doesn't get a
-    duplicate row.
+    existing (competitor_id, name) match (see app/models/product.py) ONLY
+    when the item has no sku at all. Deliberately elif, not a second
+    unconditional check: when item.sku is present but doesn't match any
+    existing row (a genuinely new SKU this competitor hasn't been seen
+    with before), that must create a new Product, not fall through to a
+    name match. Several sites (e.g. gardeners.com's per-variant
+    "-vs-sku-NNNNN" product URLs) render different SKU variants of the same
+    base item under near-identical rendered title text; falling through to
+    name in that case silently merged distinct SKUs (different sizes/
+    configurations, different real prices) into one Product row, corrupting
+    its price history with an unrelated variant's price (confirmed live: a
+    $1 placeholder-priced variant and a real $999.99 variant merged into one
+    row, surfaced downstream as a fake +99,899% "price change").
     """
     product = None
     if item.sku:
@@ -98,7 +163,7 @@ async def _find_or_create_product(
             select(Product).where(Product.competitor_id == competitor_id, Product.sku == item.sku)
         )
         product = result.scalar_one_or_none()
-    if product is None:
+    elif item.name:
         result = await session.execute(
             select(Product).where(Product.competitor_id == competitor_id, Product.name == item.name)
         )
@@ -274,6 +339,7 @@ async def ingest_page(session: AsyncSession, competitor_slug: str, url: str) -> 
         previous_price_context = price_context
 
         extracted = await extract_products_merged(fetched, competitor_slug=competitor_slug)
+        extracted_products = _dedupe_page_items(extracted.products)
 
         for detected in await discover_campaigns(fetched.html, page_url):
             if await _persist_campaign(session, competitor_id, detected):
@@ -283,7 +349,7 @@ async def ingest_page(session: AsyncSession, competitor_slug: str, url: str) -> 
         new_links = page_product_links - product_links
         product_links |= page_product_links
 
-        new_items = [item for item in extracted.products if item.name not in seen_names]
+        new_items = [item for item in extracted_products if item.name not in seen_names]
         # A listing page contributes two independent things: products
         # extracted directly from its own content, and links to individual
         # product pages. A collection page with no inline JSON-LD/microdata
@@ -429,7 +495,8 @@ async def crawl_competitor(session: AsyncSession, competitor_slug: str, *, scope
                 fetched = await fetch_page(product_url, rate_limit_seconds=config.crawl.rate_limit_seconds)
                 pages_fetched += 1
                 extracted = await extract_products_merged(fetched, competitor_slug=competitor_slug)
-                for item in extracted.products:
+                items = _select_own_page_item(_dedupe_page_items(extracted.products), product_url)
+                for item in items:
                     await _persist_extracted_product(session, competitor_id, item, product_url)
                 await session.commit()
             except Exception:

@@ -21,7 +21,7 @@ from sqlalchemy import delete, select
 
 from app.db.session import async_session_factory, get_db
 from app.main import app
-from app.models import Campaign, Competitor, CrawlRun, PriceObservation, Product
+from app.models import Campaign, Competitor, CrawlRun, Development, PriceObservation, Product
 
 
 @pytest_asyncio.fixture
@@ -84,6 +84,7 @@ async def competitor_factory(db_session):
         # Campaign rows can reference a product (Campaign.product_id), so
         # they must go before the products they point to, not after.
         await db_session.execute(delete(Campaign).where(Campaign.competitor_id.in_(created_ids)))
+        await db_session.execute(delete(Development).where(Development.competitor_id.in_(created_ids)))
         if product_ids:
             await db_session.execute(
                 delete(PriceObservation).where(PriceObservation.product_id.in_(product_ids))

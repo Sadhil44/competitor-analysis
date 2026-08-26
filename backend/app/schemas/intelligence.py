@@ -52,6 +52,19 @@ class RaisedBedProduct(BaseModel):
     footprint: str | None
 
 
+class PriceMoveOut(BaseModel):
+    product_id: int
+    product_name: str
+    product_url: str
+    competitor_slug: str
+    competitor_name: str
+    is_own_brand: bool
+    first_price: Decimal
+    last_price: Decimal
+    pct_change: float
+    currency: str
+
+
 class ComparableMatch(BaseModel):
     product_id: int
     name: str

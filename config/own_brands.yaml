@@ -46,21 +46,11 @@ own_brands:
     name: "Gardener's Supply Company"
     website_url: "https://www.gardeners.com"
     notes: >
-      Direct/catalog/web business. See "gardeners-supply-retail" (brand_num
-      72) for the retail-store channel of the same brand.
-
-  - brand_num: 66
-    slug: "amazon-gardeners-fulfillment"
-    name: "Amazon Gardeners Fulfillment"
-    website_url: ""
-    notes: >
-      Amazon marketplace fulfillment channel, not an independent storefront
-      — no website_url to track.
-
-  - brand_num: 72
-    slug: "gardeners-supply-retail"
-    name: "Gardener's Supply Retail"
-    website_url: ""
-    notes: >
-      Retail-store restock channel for Gardener's Supply Company (brand_num
-      53), not an independent storefront — no website_url to track.
+      Direct/catalog/web business — also tracked as a scraped competitor in
+      competitors.yaml (its full live catalog), which is what the workbench
+      and dashboard actually use; this feed entry just maps the internal
+      brand_num to the same slug. brand_num 66 (Amazon fulfillment) and 72
+      (retail-store restock) were deliberately removed here: same real
+      catalog as this brand, sold through a different internal channel —
+      not a distinct storefront worth tracking as its own "competitor," and
+      their only data source was this feed import, never scraping.
