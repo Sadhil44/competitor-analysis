@@ -65,6 +65,7 @@ class PriceMoveOut(BaseModel):
     last_price: Decimal
     pct_change: float
     currency: str
+    last_observed_at: datetime
 
 
 class OpportunityOut(BaseModel):

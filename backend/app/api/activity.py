@@ -34,6 +34,7 @@ async def get_price_changes(
             last_price=m.last_price,
             pct_change=m.pct_change,
             currency=m.currency,
+            last_observed_at=m.last_observed_at,
         )
         for m in moves
     ]

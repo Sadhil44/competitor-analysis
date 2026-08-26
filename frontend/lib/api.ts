@@ -289,7 +289,7 @@ export async function getRaisedBedComparables(productId: number, limit = 10): Pr
 }
 
 export interface ActivityItem {
-  kind: "campaign" | "development";
+  kind: "campaign" | "development" | "price_move";
   id: number;
   competitor_slug: string;
   competitor_name: string;
@@ -298,12 +298,39 @@ export interface ActivityItem {
   at: string;
   category?: string;
   discount_text?: string;
+  pct_change?: number;
+  product_id?: number;
 }
 
-// No dedicated backend endpoint for this — it fans the existing per-competitor
-// campaigns/developments calls out across every tracked competitor and merges
-// them client-side (server-side here; this runs in a Server Component) into
-// one timeline. Cheap enough at this data volume to skip a new aggregate route.
+export interface PriceMove {
+  product_id: number;
+  product_name: string;
+  product_url: string;
+  competitor_slug: string;
+  competitor_name: string;
+  is_own_brand: boolean;
+  first_price: string;
+  last_price: string;
+  pct_change: number;
+  currency: string;
+  last_observed_at: string;
+}
+
+export async function getPriceChanges(days = 14, minPctChange = 5.0, limit = 20): Promise<PriceMove[]> {
+  return (
+    (await apiFetch<PriceMove[]>(
+      `/activity/price-changes?days=${days}&min_pct_change=${minPctChange}&limit=${limit}`
+    )) ?? []
+  );
+}
+
+// No dedicated backend endpoint for campaigns/developments here — it fans
+// the existing per-competitor calls out across every tracked competitor
+// and merges them client-side (server-side here; this runs in a Server
+// Component) into one timeline; cheap enough at this data volume to skip a
+// new aggregate route. Price moves DO have a dedicated cross-company
+// endpoint already (app/api/activity.py) since that comparison can't be
+// done per-competitor at all, so that one's folded in directly.
 export async function getRecentActivity(competitors: Competitor[], limit = 12): Promise<ActivityItem[]> {
   const perCompetitor = await Promise.all(
     competitors.map(async (c) => {
@@ -331,6 +358,19 @@ export async function getRecentActivity(competitors: Competitor[], limit = 12): 
       return [...campaignItems, ...developmentItems];
     })
   );
+  const priceMoves = await getPriceChanges(30, 5.0, 15);
+  const priceMoveItems: ActivityItem[] = priceMoves.map((m) => ({
+    kind: "price_move",
+    id: m.product_id,
+    competitor_slug: m.competitor_slug,
+    competitor_name: m.competitor_name,
+    title: m.product_name,
+    detail: `${m.currency} ${m.first_price} → ${m.currency} ${m.last_price}`,
+    at: m.last_observed_at,
+    pct_change: m.pct_change,
+    product_id: m.product_id,
+  }));
+  perCompetitor.push(priceMoveItems);
   return perCompetitor
     .flat()
     .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())

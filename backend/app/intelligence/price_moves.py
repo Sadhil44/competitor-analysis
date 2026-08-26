@@ -52,6 +52,15 @@ class PriceMove:
     last_price: Decimal
     pct_change: float
     currency: str
+    last_observed_at: datetime
+
+
+
+# Preference order when a product has observations from more than one
+# source (every own-brand product does: internal_feed alongside
+# scheduled_crawl once it's also scraped). scheduled_crawl wins when
+# present — it's the only preference chosen based on data plausibility.
+_SOURCE_PREFERENCE = ("scheduled_crawl", "internal_feed")
 
 
 async def find_price_moves(
@@ -59,15 +68,27 @@ async def find_price_moves(
 ) -> list[PriceMove]:
     since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
+    # Partitioned by (product_id, source), not product_id alone — a
+    # product's internal_feed observations (a seasonal wholesale/catalog
+    # reference price, quarterly cadence) and its scheduled_crawl
+    # observations (the live scraped retail price) are two genuinely
+    # different numbers, not two points on one price timeline. Diffing
+    # across them produced exactly the fake-looking move this guards
+    # against live: a mid-season "$16.99, out of stock" scrape sitting
+    # between two $28-29 seasonal feed entries read as a 70%+ "price move"
+    # that was really just two unrelated price concepts collided.
     rn_first = func.row_number().over(
-        partition_by=PriceObservation.product_id, order_by=PriceObservation.observed_at.asc()
+        partition_by=(PriceObservation.product_id, PriceObservation.source),
+        order_by=PriceObservation.observed_at.asc(),
     ).label("rn_first")
     rn_last = func.row_number().over(
-        partition_by=PriceObservation.product_id, order_by=PriceObservation.observed_at.desc()
+        partition_by=(PriceObservation.product_id, PriceObservation.source),
+        order_by=PriceObservation.observed_at.desc(),
     ).label("rn_last")
     subq = (
         select(
             PriceObservation.product_id,
+            PriceObservation.source,
             PriceObservation.price,
             PriceObservation.currency,
             PriceObservation.observed_at,
@@ -81,9 +102,9 @@ async def find_price_moves(
         await session.execute(select(subq).where(or_(subq.c.rn_first == 1, subq.c.rn_last == 1)))
     ).all()
 
-    by_product: dict[int, dict] = {}
+    by_product_source: dict[tuple[int, str], dict] = {}
     for row in endpoint_rows:
-        entry = by_product.setdefault(row.product_id, {})
+        entry = by_product_source.setdefault((row.product_id, row.source), {})
         if row.rn_first == 1:
             entry["first_price"] = row.price
             entry["first_at"] = row.observed_at
@@ -93,8 +114,15 @@ async def find_price_moves(
             entry["last_at"] = row.observed_at
             entry["currency"] = row.currency
 
-    candidates: list[tuple[int, Decimal, Decimal, float, str]] = []
-    for product_id, entry in by_product.items():
+    by_product: dict[int, dict[str, dict]] = {}
+    for (product_id, source), entry in by_product_source.items():
+        by_product.setdefault(product_id, {})[source] = entry
+
+    candidates: list[tuple[int, Decimal, Decimal, float, str, datetime]] = []
+    for product_id, sources in by_product.items():
+        entry = next((sources[s] for s in _SOURCE_PREFERENCE if s in sources), None)
+        if entry is None:
+            continue
         first_price, last_price = entry.get("first_price"), entry.get("last_price")
         if first_price is None or last_price is None or entry.get("first_at") == entry.get("last_at"):
             continue
@@ -111,7 +139,9 @@ async def find_price_moves(
         if abs(pct) > MAX_PLAUSIBLE_PCT_CHANGE:
             continue
         if abs(pct) >= min_pct_change:
-            candidates.append((product_id, first_price, last_price, pct, entry.get("currency") or "USD"))
+            candidates.append(
+                (product_id, first_price, last_price, pct, entry.get("currency") or "USD", entry["last_at"])
+            )
 
     if not candidates:
         return []
@@ -130,7 +160,7 @@ async def find_price_moves(
     product_by_id = {p.id: (p, c) for p, c in product_rows}
 
     moves = []
-    for product_id, first_price, last_price, pct, currency in candidates:
+    for product_id, first_price, last_price, pct, currency, last_observed_at in candidates:
         entry = product_by_id.get(product_id)
         if entry is None:
             continue
@@ -147,6 +177,7 @@ async def find_price_moves(
                 last_price=last_price,
                 pct_change=pct,
                 currency=currency,
+                last_observed_at=last_observed_at,
             )
         )
     return moves

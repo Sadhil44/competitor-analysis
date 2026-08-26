@@ -153,6 +153,7 @@ function CompetitorSection({ title, competitors }: { title: string; competitors:
 const ACTIVITY_STYLE: Record<ActivityItem["kind"], { badge: string; label: string }> = {
   campaign: { badge: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300", label: "Campaign" },
   development: { badge: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300", label: "Development" },
+  price_move: { badge: "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300", label: "Price move" },
 };
 
 function ActivityFeed({ items }: { items: ActivityItem[] }) {
@@ -182,7 +183,26 @@ function ActivityFeed({ items }: { items: ActivityItem[] }) {
                     </Link>
                     <span className="ml-auto shrink-0 text-zinc-400 dark:text-zinc-600">{timeAgo(item.at)}</span>
                   </div>
-                  <div className="mt-1.5 text-sm font-medium">{item.title}</div>
+                  <div className="mt-1.5 flex items-center gap-1.5 text-sm font-medium">
+                    {item.product_id ? (
+                      <Link href={`/products/${item.product_id}`} className="hover:underline">
+                        {item.title}
+                      </Link>
+                    ) : (
+                      item.title
+                    )}
+                    {item.pct_change !== undefined && (
+                      <span
+                        className={
+                          item.pct_change > 0
+                            ? "text-rose-600 dark:text-rose-400"
+                            : "text-emerald-600 dark:text-emerald-400"
+                        }
+                      >
+                        {item.pct_change > 0 ? "▲" : "▼"} {Math.abs(item.pct_change).toFixed(1)}%
+                      </span>
+                    )}
+                  </div>
                   {item.detail && (
                     <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500 dark:text-zinc-500">{item.detail}</p>
                   )}
