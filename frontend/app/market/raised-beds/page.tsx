@@ -2,11 +2,14 @@ import Link from "next/link";
 import {
   BrandSummary,
   MatrixCell,
+  OpportunityOut,
   RaisedBedProduct,
   getRaisedBedMatrix,
+  getRaisedBedOpportunities,
   getRaisedBedProducts,
   getRaisedBedSummary,
 } from "@/lib/api";
+import PricePositionChart from "@/components/PricePositionChart";
 
 const STATUS_STYLE: Record<string, string> = {
   success: "bg-emerald-500",
@@ -35,7 +38,11 @@ function formatPct(value: number): string {
 }
 
 export default async function RaisedBedWorkbenchPage() {
-  const [summary, matrix] = await Promise.all([getRaisedBedSummary(), getRaisedBedMatrix()]);
+  const [summary, matrix, opportunities] = await Promise.all([
+    getRaisedBedSummary(),
+    getRaisedBedMatrix(),
+    getRaisedBedOpportunities(),
+  ]);
 
   if (!summary) {
     return (
@@ -66,6 +73,15 @@ export default async function RaisedBedWorkbenchPage() {
       </div>
 
       <SnapshotBar brands={summary.brands} />
+      <OpportunityBoard gaps={opportunities?.gaps ?? []} strengths={opportunities?.strengths ?? []} />
+
+      <section>
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
+          Price positioning
+        </h2>
+        <PricePositionChart brands={summary.brands} />
+      </section>
+
       <PortfolioKPIs brands={summary.brands} />
       <AssortmentMatrix cells={matrix?.cells ?? []} excluded={matrix?.excluded_incomplete_count ?? 0} />
 
@@ -73,6 +89,77 @@ export default async function RaisedBedWorkbenchPage() {
         <BrandProductTable key={brand.competitor_slug} brand={brand} products={productsByBrand[i]} />
       ))}
     </div>
+  );
+}
+
+const BRAND_LABEL: Record<string, string> = {
+  "gardeners-supply": "Gardener's Supply",
+  "epic-gardening": "Epic Gardening",
+  "vego-garden": "Vego Garden",
+};
+
+function describeCombo(o: OpportunityOut): string {
+  const material = o.material.replace(/_/g, " ");
+  return `${o.height_band} · ${material} · ${o.form}`;
+}
+
+function OpportunityBoard({ gaps, strengths }: { gaps: OpportunityOut[]; strengths: OpportunityOut[] }) {
+  return (
+    <section>
+      <div className="mb-1 flex items-baseline justify-between">
+        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
+          Opportunities &amp; gaps
+        </h2>
+        <span className="text-xs text-zinc-400">Derived from the assortment matrix below — not AI-generated</span>
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/20">
+          <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-300">
+            Gaps — competitors carry it, we don&apos;t
+          </h3>
+          {gaps.length === 0 ? (
+            <p className="mt-2 text-sm text-amber-800/80 dark:text-amber-400/80">
+              No material/height/form combination clears the noise threshold yet.
+            </p>
+          ) : (
+            <ul className="mt-3 flex flex-col gap-2.5">
+              {gaps.map((g, i) => (
+                <li key={i} className="rounded-lg border border-amber-200/70 bg-white p-3 text-sm dark:border-amber-900/50 dark:bg-zinc-950">
+                  <div className="font-medium">{describeCombo(g)}</div>
+                  <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+                    {Object.entries(g.competitor_counts)
+                      .map(([slug, count]) => `${BRAND_LABEL[slug] ?? slug}: ${count} SKU${count === 1 ? "" : "s"}`)
+                      .join(" · ")}{" "}
+                    — we have 0
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
+          <h3 className="text-sm font-semibold text-emerald-900 dark:text-emerald-300">
+            Strengths — we carry it, competitors don&apos;t
+          </h3>
+          {strengths.length === 0 ? (
+            <p className="mt-2 text-sm text-emerald-800/80 dark:text-emerald-400/80">
+              No material/height/form combination clears the noise threshold yet.
+            </p>
+          ) : (
+            <ul className="mt-3 flex flex-col gap-2.5">
+              {strengths.map((s, i) => (
+                <li key={i} className="rounded-lg border border-emerald-200/70 bg-white p-3 text-sm dark:border-emerald-900/50 dark:bg-zinc-950">
+                  <div className="font-medium">{describeCombo(s)}</div>
+                  <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+                    We have {s.own_count} SKU{s.own_count === 1 ? "" : "s"} — Epic and Vego have 0
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 

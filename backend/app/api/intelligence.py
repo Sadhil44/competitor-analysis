@@ -17,16 +17,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.intelligence import RAISED_BED_TYPES, WORKBENCH_SLUGS
+from app.intelligence.gaps import find_opportunities
 from app.intelligence.matching import find_comparables
 from app.models import Competitor, CrawlRun, PriceObservation, Product
 from app.schemas.intelligence import (
     BrandSummary,
     ComparableMatch,
     MatrixCell,
+    OpportunityAnalysis,
+    OpportunityOut,
     RaisedBedMatrix,
     RaisedBedProduct,
     RaisedBedSummary,
 )
+
+# The own brand this workbench's gap/strength findings are computed
+# relative to — see GENERAL_SYSTEM_PROMPT's note that "us" means
+# gardeners-supply for this one workbench, not the usual gurneys.
+OWN_BRAND_SLUG = "gardeners-supply"
 
 router = APIRouter(prefix="/intelligence/raised-beds", tags=["intelligence"])
 
@@ -91,6 +99,8 @@ async def get_summary(db: AsyncSession = Depends(get_db)):
                 is_own_brand=competitor.is_own_brand,
                 product_count=len(products),
                 median_price=Decimal(str(median(prices))) if prices else None,
+                min_price=min(prices) if prices else None,
+                max_price=max(prices) if prices else None,
                 promo_share=promo_count / denom,
                 in_stock_share=in_stock_count / denom,
                 last_crawled_at=latest_crawl.started_at if latest_crawl else None,
@@ -141,8 +151,12 @@ async def get_products(competitor_slug: str, db: AsyncSession = Depends(get_db))
     return results
 
 
-@router.get("/matrix", response_model=RaisedBedMatrix)
-async def get_matrix(db: AsyncSession = Depends(get_db)):
+async def _compute_matrix_cells(db: AsyncSession) -> tuple[list[tuple[str, str, str, str, int]], int]:
+    """Shared by /matrix and /opportunities — both need the same
+    (competitor_slug, material, height_band, form, count) rows; computing
+    it once keeps the two endpoints from silently drifting apart on what
+    counts as a complete-enough product to include.
+    """
     result = await db.execute(select(Competitor).where(Competitor.slug.in_(WORKBENCH_SLUGS)))
     competitor_slugs = {c.id: c.slug for c in result.scalars().all()}
 
@@ -159,12 +173,52 @@ async def get_matrix(db: AsyncSession = Depends(get_db)):
             key = (slug, material, height_band, form)
             cells[key] = cells.get(key, 0) + 1
 
+    rows = [(slug, material, height_band, form, count) for (slug, material, height_band, form), count in cells.items()]
+    return rows, excluded
+
+
+@router.get("/matrix", response_model=RaisedBedMatrix)
+async def get_matrix(db: AsyncSession = Depends(get_db)):
+    rows, excluded = await _compute_matrix_cells(db)
     return RaisedBedMatrix(
         cells=[
             MatrixCell(competitor_slug=slug, material=material, height_band=height_band, form=form, count=count)
-            for (slug, material, height_band, form), count in cells.items()
+            for slug, material, height_band, form, count in rows
         ],
         excluded_incomplete_count=excluded,
+    )
+
+
+@router.get("/opportunities", response_model=OpportunityAnalysis)
+async def get_opportunities(min_count: int = 2, limit: int = 10, db: AsyncSession = Depends(get_db)):
+    rows, _ = await _compute_matrix_cells(db)
+    gaps, strengths = find_opportunities(OWN_BRAND_SLUG, WORKBENCH_SLUGS, rows, min_count=min_count, limit=limit)
+    return OpportunityAnalysis(
+        own_brand_slug=OWN_BRAND_SLUG,
+        gaps=[
+            OpportunityOut(
+                material=o.material,
+                height_band=o.height_band,
+                form=o.form,
+                kind=o.kind,
+                own_count=o.own_count,
+                competitor_counts=o.competitor_counts,
+                total_competitor_count=o.total_competitor_count,
+            )
+            for o in gaps
+        ],
+        strengths=[
+            OpportunityOut(
+                material=o.material,
+                height_band=o.height_band,
+                form=o.form,
+                kind=o.kind,
+                own_count=o.own_count,
+                competitor_counts=o.competitor_counts,
+                total_competitor_count=o.total_competitor_count,
+            )
+            for o in strengths
+        ],
     )
 
 

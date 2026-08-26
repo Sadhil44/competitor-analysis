@@ -131,6 +131,52 @@ competitors:
       catalog_urls:
         - "https://www.gardeners.com/collections/raised-garden-beds"
 
+  - slug: spring-hill-nurseries
+    name: "Spring Hill Nurseries"
+    website_url: "https://www.springhillnursery.com"
+    active: true
+    notes: >
+      Added 2026-08-26 — OUR OWN brand (already is_own_brand=true via
+      brand_num 4 in config/own_brands.yaml, dual-listed the same way
+      gardeners-supply is above), previously feed-only. Verified perennials
+      category page loads correctly via our fetcher (2026-08-26).
+    crawl:
+      cadence_cron: "0 6 * * *"
+      rate_limit_seconds: 2
+      catalog_urls:
+        - "https://springhillnursery.com/collections/best_selling_perennial_plants"
+
+  - slug: brecks
+    name: "Breck's"
+    website_url: "https://www.brecks.com"
+    active: true
+    notes: >
+      Added 2026-08-26 — OUR OWN brand (already is_own_brand=true via
+      brand_num 7 in config/own_brands.yaml), previously feed-only. Verified
+      spring-flowering-bulbs category page loads correctly via our fetcher
+      (2026-08-26).
+    crawl:
+      cadence_cron: "0 6 * * *"
+      rate_limit_seconds: 2
+      catalog_urls:
+        - "https://www.brecks.com/collections/spring_flowering_bulbs"
+
+  - slug: k-van-bourgondien
+    name: "K. van Bourgondien"
+    website_url: "https://www.dutchbulbs.com"
+    active: true
+    notes: >
+      Added 2026-08-26 — OUR OWN brand (already is_own_brand=true via
+      brand_num 36 in config/own_brands.yaml), previously feed-only and
+      whose domain that entry's own note flagged as "not independently
+      re-verified" — now verified: dutchbulbs.com/collections/all loads
+      correctly via our fetcher (2026-08-26).
+    crawl:
+      cadence_cron: "0 6 * * *"
+      rate_limit_seconds: 2
+      catalog_urls:
+        - "https://www.dutchbulbs.com/collections/all"
+
   - slug: gurneys
     name: "Gurney's (parent brand of Gardens Alive — us)"
     website_url: "https://www.gurneys.com"

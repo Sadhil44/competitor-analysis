@@ -10,6 +10,8 @@ class BrandSummary(BaseModel):
     is_own_brand: bool
     product_count: int
     median_price: Decimal | None
+    min_price: Decimal | None
+    max_price: Decimal | None
     promo_share: float  # 0-1
     in_stock_share: float  # 0-1
     last_crawled_at: datetime | None
@@ -63,6 +65,22 @@ class PriceMoveOut(BaseModel):
     last_price: Decimal
     pct_change: float
     currency: str
+
+
+class OpportunityOut(BaseModel):
+    material: str
+    height_band: str
+    form: str
+    kind: str  # "gap" | "strength"
+    own_count: int
+    competitor_counts: dict[str, int]
+    total_competitor_count: int
+
+
+class OpportunityAnalysis(BaseModel):
+    own_brand_slug: str
+    gaps: list[OpportunityOut]
+    strengths: list[OpportunityOut]
 
 
 class ComparableMatch(BaseModel):

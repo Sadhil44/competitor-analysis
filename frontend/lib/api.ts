@@ -190,6 +190,8 @@ export interface BrandSummary {
   is_own_brand: boolean;
   product_count: number;
   median_price: string | null;
+  min_price: string | null;
+  max_price: string | null;
   promo_share: number;
   in_stock_share: number;
   last_crawled_at: string | null;
@@ -253,6 +255,26 @@ export async function getRaisedBedProducts(competitorSlug: string): Promise<Rais
       `/intelligence/raised-beds/products?competitor_slug=${encodeURIComponent(competitorSlug)}`
     )) ?? []
   );
+}
+
+export interface OpportunityOut {
+  material: string;
+  height_band: string;
+  form: string;
+  kind: "gap" | "strength";
+  own_count: number;
+  competitor_counts: Record<string, number>;
+  total_competitor_count: number;
+}
+
+export interface OpportunityAnalysis {
+  own_brand_slug: string;
+  gaps: OpportunityOut[];
+  strengths: OpportunityOut[];
+}
+
+export async function getRaisedBedOpportunities(): Promise<OpportunityAnalysis | null> {
+  return apiFetch<OpportunityAnalysis>("/intelligence/raised-beds/opportunities");
 }
 
 export async function getRaisedBedMatrix(): Promise<RaisedBedMatrix | null> {
