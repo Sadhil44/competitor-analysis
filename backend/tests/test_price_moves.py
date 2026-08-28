@@ -129,6 +129,30 @@ async def test_never_diffs_internal_feed_against_scheduled_crawl(db_session, com
     assert all(m.product_id != product.id for m in moves)
 
 
+async def test_excludes_oscillating_price(db_session, competitor_factory):
+    """Regression for a real bad result surfaced live: Epic Gardening's
+    Shopify product pages list more than one sellable offer (different
+    seed-packet sizes sharing one product row), and the recorded price
+    bounced between the two real offer prices across crawls instead of
+    settling on one -- $3.49, $3.49, $5.99, $5.99, $5.99, $3.49, $5.99,
+    $5.99. A first-vs-last diff on that sequence reads as a 71.6% "price
+    move," but it's oscillating extraction noise, not a step change: the
+    value returns to an earlier price after having already left it, which a
+    genuine one-time change never does.
+    """
+    competitor = await competitor_factory(name="Zzyxquil Co")
+    product = await _make_product(db_session, competitor)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    prices = ["3.49", "3.49", "5.99", "5.99", "5.99", "3.49", "5.99", "5.99"]
+    db_session.add_all(
+        [_obs(product.id, price, "USD", now - timedelta(hours=len(prices) - i)) for i, price in enumerate(prices)]
+    )
+    await db_session.commit()
+
+    moves = await find_price_moves(db_session, days=14, min_pct_change=5.0, limit=1000)
+    assert all(m.product_id != product.id for m in moves)
+
+
 async def test_prefers_scheduled_crawl_when_both_sources_present(db_session, competitor_factory):
     """When a product has enough of ITS OWN scheduled_crawl history to
     compute a move, that's the one used -- it's the live scraped price,

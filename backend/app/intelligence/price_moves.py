@@ -119,6 +119,7 @@ async def find_price_moves(
         by_product.setdefault(product_id, {})[source] = entry
 
     candidates: list[tuple[int, Decimal, Decimal, float, str, datetime]] = []
+    chosen_source_by_product: dict[int, str] = {}
     for product_id, sources in by_product.items():
         entry = next((sources[s] for s in _SOURCE_PREFERENCE if s in sources), None)
         if entry is None:
@@ -139,9 +140,53 @@ async def find_price_moves(
         if abs(pct) > MAX_PLAUSIBLE_PCT_CHANGE:
             continue
         if abs(pct) >= min_pct_change:
+            source_name = next(s for s in _SOURCE_PREFERENCE if s in sources)
+            chosen_source_by_product[product_id] = source_name
             candidates.append(
                 (product_id, first_price, last_price, pct, entry.get("currency") or "USD", entry["last_at"])
             )
+
+    if not candidates:
+        return []
+
+    # A product page that lists more than one sellable offer (e.g. a Shopify
+    # product with several size/quantity variants sharing one product row —
+    # confirmed live on Epic Gardening's seed listings) can have its recorded
+    # price bounce between two real, different offer prices across crawls
+    # instead of settling on one — e.g. $3.49, $3.49, $5.99, $5.99, $3.49,
+    # $5.99. That reads as a dramatic "price move" by a first-vs-last diff,
+    # but it's oscillating extraction noise, not a step change. A real price
+    # change is a single step: stable at A, then stable at B — at most two
+    # runs of a distinct value. More than two runs means the value bounced
+    # back to an earlier price at least once, which a genuine one-time
+    # change never does.
+    history_rows = (
+        await session.execute(
+            select(
+                PriceObservation.product_id, PriceObservation.source,
+                PriceObservation.price, PriceObservation.observed_at,
+            )
+            .where(
+                PriceObservation.product_id.in_([c[0] for c in candidates]),
+                PriceObservation.observed_at >= since,
+                PriceObservation.price.is_not(None),
+            )
+            .order_by(PriceObservation.product_id, PriceObservation.observed_at)
+        )
+    ).all()
+    history_by_product: dict[int, list[tuple[str, Decimal]]] = {}
+    for product_id, source, price, _observed_at in history_rows:
+        history_by_product.setdefault(product_id, []).append((source, price))
+
+    stable_candidates = []
+    for c in candidates:
+        product_id = c[0]
+        chosen_source = chosen_source_by_product[product_id]
+        seq = [price for source, price in history_by_product.get(product_id, []) if source == chosen_source]
+        runs = sum(1 for prev, curr in zip(seq, seq[1:]) if curr != prev) + (1 if seq else 0)
+        if runs <= 2:
+            stable_candidates.append(c)
+    candidates = stable_candidates
 
     if not candidates:
         return []
