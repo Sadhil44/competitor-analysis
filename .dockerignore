@@ -1,0 +1,15 @@
+# Backend image build context is now the repo root (see docker-compose.yml
+# and backend/Dockerfile) — this keeps that upload from also including the
+# frontend's node_modules/.next (the backend image never needs them) and
+# other dev-only cruft, mirroring backend/.dockerignore's exclusions
+# (tests/ stays out of the image; local docker-compose's bind mount still
+# makes it available for `docker compose exec backend pytest` in dev).
+frontend/node_modules/
+frontend/.next/
+.git/
+**/__pycache__/
+backend/.venv/
+backend/*.egg-info/
+backend/.pytest_cache/
+backend/.ruff_cache/
+backend/tests/
