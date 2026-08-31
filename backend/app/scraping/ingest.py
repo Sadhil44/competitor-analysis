@@ -157,17 +157,31 @@ async def _find_or_create_product(
     $1 placeholder-priced variant and a real $999.99 variant merged into one
     row, surfaced downstream as a fake +99,899% "price change").
     """
+    # Neither (competitor_id, sku) nor (competitor_id, name) has a DB-level
+    # uniqueness constraint (see app/models/product.py) — confirmed live on
+    # a real crawl: gurneys.com's spring-catalog-collection listing has more
+    # than one existing Product row sharing the same name for this
+    # competitor, and scalar_one_or_none() crashed the whole page's ingest
+    # with MultipleResultsFound instead of picking one, per ingest_page's
+    # own contract that a bad/unexpected page must not abort the crawl.
+    # .first() (ordered by id, so the choice is at least stable run to run)
+    # tolerates that instead of raising — an existing duplicate is a
+    # pre-existing data issue this call site isn't responsible for fixing.
     product = None
     if item.sku:
         result = await session.execute(
-            select(Product).where(Product.competitor_id == competitor_id, Product.sku == item.sku)
+            select(Product)
+            .where(Product.competitor_id == competitor_id, Product.sku == item.sku)
+            .order_by(Product.id)
         )
-        product = result.scalar_one_or_none()
+        product = result.scalars().first()
     elif item.name:
         result = await session.execute(
-            select(Product).where(Product.competitor_id == competitor_id, Product.name == item.name)
+            select(Product)
+            .where(Product.competitor_id == competitor_id, Product.name == item.name)
+            .order_by(Product.id)
         )
-        product = result.scalar_one_or_none()
+        product = result.scalars().first()
 
     url = item.url or fallback_url
     if product is None:

@@ -35,7 +35,14 @@ def name_matches_query(product_name: str, query_keywords: list[str]) -> bool:
     if not query_keywords:
         return True
     name_lower = product_name.lower()
-    name_words = re.findall(r"[a-zA-Z0-9]+", name_lower)
+    # A higher length floor than significant_keywords()'s (>2) specifically
+    # for the reverse "name word is a substring of the query word" check
+    # below — a 3-letter name word like "ben" or "was" is a coincidental
+    # substring of all sorts of unrelated compound words (e.g. "ben" inside
+    # "workBENch"), producing false-positive matches with no real relation
+    # to the query. 4+ letters is enough to keep genuine cases like "bench"
+    # matching a "workbench" query.
+    name_words = [w for w in re.findall(r"[a-zA-Z0-9]+", name_lower) if len(w) >= 4]
     for kw in query_keywords:
         if kw in name_lower:
             return True

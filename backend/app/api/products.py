@@ -3,6 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.intelligence.text import name_matches_query as _name_matches_query
 from app.intelligence.text import significant_keywords as _significant_keywords
 from app.models import Campaign, Competitor, PriceObservation, Product
 from app.schemas.campaign import CampaignRead
@@ -10,6 +11,58 @@ from app.schemas.comparable import ComparableProduct
 from app.schemas.product import ProductRead
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+async def _hydrate_with_latest_price(
+    db: AsyncSession, rows: list[tuple[Product, Competitor]]
+) -> list[ComparableProduct]:
+    matched_product_ids = [product.id for product, _ in rows]
+    latest_by_product: dict[int, PriceObservation] = {}
+    if matched_product_ids:
+        latest_result = await db.execute(
+            select(PriceObservation)
+            .where(PriceObservation.product_id.in_(matched_product_ids))
+            .order_by(PriceObservation.product_id, PriceObservation.observed_at.desc())
+            .distinct(PriceObservation.product_id)
+        )
+        latest_by_product = {obs.product_id: obs for obs in latest_result.scalars().all()}
+
+    results = []
+    for product, competitor in rows:
+        obs = latest_by_product.get(product.id)
+        results.append(
+            ComparableProduct(
+                id=product.id,
+                name=product.name,
+                url=product.url,
+                competitor_id=competitor.id,
+                competitor_slug=competitor.slug,
+                competitor_name=competitor.name,
+                latest_price=obs.price if obs else None,
+                currency=obs.currency if obs else None,
+            )
+        )
+    return results
+
+
+async def _fallback_keyword_scan(
+    db: AsyncSession, keywords: list[str], *, exclude_competitor_id: int | None, limit: int
+) -> list[ComparableProduct]:
+    """Bidirectional keyword-overlap match (see app/intelligence/text.py) as
+    a fallback when to_tsquery finds nothing — catches a query like
+    "workbench" against a product actually named "Cedar Potting Bench",
+    which stemmed full-text search can't (they don't share a lexeme). Only
+    runs on a zero-result tsquery search, so the full-table scan this
+    requires (no index supports the substring check) stays rare rather than
+    being paid on every request.
+    """
+    stmt = select(Product, Competitor).join(Competitor, Competitor.id == Product.competitor_id)
+    if exclude_competitor_id is not None:
+        stmt = stmt.where(Product.competitor_id != exclude_competitor_id)
+    all_rows = (await db.execute(stmt)).all()
+
+    matched = [(row.Product, row.Competitor) for row in all_rows if _name_matches_query(row.Product.name, keywords)]
+    return await _hydrate_with_latest_price(db, matched[:limit])
 
 
 async def _search_by_keywords(
@@ -41,33 +94,12 @@ async def _search_by_keywords(
         stmt = stmt.where(Product.competitor_id != exclude_competitor_id)
     rows = (await db.execute(stmt)).all()
 
-    matched_product_ids = [row.Product.id for row in rows]
-    latest_by_product: dict[int, PriceObservation] = {}
-    if matched_product_ids:
-        latest_result = await db.execute(
-            select(PriceObservation)
-            .where(PriceObservation.product_id.in_(matched_product_ids))
-            .order_by(PriceObservation.product_id, PriceObservation.observed_at.desc())
-            .distinct(PriceObservation.product_id)
+    if not rows:
+        return await _fallback_keyword_scan(
+            db, keywords, exclude_competitor_id=exclude_competitor_id, limit=limit
         )
-        latest_by_product = {obs.product_id: obs for obs in latest_result.scalars().all()}
 
-    results = []
-    for row in rows:
-        obs = latest_by_product.get(row.Product.id)
-        results.append(
-            ComparableProduct(
-                id=row.Product.id,
-                name=row.Product.name,
-                url=row.Product.url,
-                competitor_id=row.Competitor.id,
-                competitor_slug=row.Competitor.slug,
-                competitor_name=row.Competitor.name,
-                latest_price=obs.price if obs else None,
-                currency=obs.currency if obs else None,
-            )
-        )
-    return results
+    return await _hydrate_with_latest_price(db, [(row.Product, row.Competitor) for row in rows])
 
 
 @router.get("/search", response_model=list[ComparableProduct])

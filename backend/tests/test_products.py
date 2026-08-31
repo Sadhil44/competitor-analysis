@@ -59,3 +59,29 @@ async def test_respects_limit(client, db_session, competitor_factory):
     response = await client.get("/products/search", params={"q": "zzyxquil blorptastic", "limit": 2})
     assert response.status_code == 200
     assert len(response.json()) == 2
+
+
+async def test_compound_query_falls_back_to_substring_match(client, db_session, competitor_factory):
+    # "zzyxworkbench" is a single nonsense token — to_tsquery finds nothing
+    # for it (no product is literally named that), which is exactly when
+    # _fallback_keyword_scan (name_matches_query) should kick in and catch
+    # a real product whose own word ("bench") is a substring of it.
+    product = await _make_product(db_session, competitor_factory, "Cedar Zzyxworkbench Storage Bench")
+
+    response = await client.get("/products/search", params={"q": "zzyxworkbench"})
+    assert response.status_code == 200
+    assert product.id in {row["id"] for row in response.json()}
+
+
+async def test_fallback_ignores_short_incidental_substrings(client, db_session, competitor_factory):
+    # "ben" is a coincidental 3-letter substring of "zzyxworkbench" (the
+    # tail end of "...bench") with no real relation to it — the fallback's
+    # length-4 floor on name words exists specifically to keep this from
+    # matching (see app/intelligence/text.py's name_matches_query). The
+    # product name deliberately does NOT contain "zzyxworkbench" itself, so
+    # the only possible match path is the word-level "ben" substring check.
+    product = await _make_product(db_session, competitor_factory, "Zzyxlark Ben Rack")
+
+    response = await client.get("/products/search", params={"q": "zzyxworkbench"})
+    assert response.status_code == 200
+    assert product.id not in {row["id"] for row in response.json()}

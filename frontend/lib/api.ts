@@ -331,35 +331,47 @@ export async function getPriceChanges(days = 14, minPctChange = 5.0, limit = 20)
 // new aggregate route. Price moves DO have a dedicated cross-company
 // endpoint already (app/api/activity.py) since that comparison can't be
 // done per-competitor at all, so that one's folded in directly.
-export async function getRecentActivity(competitors: Competitor[], limit = 12): Promise<ActivityItem[]> {
-  const perCompetitor = await Promise.all(
-    competitors.map(async (c) => {
-      const [campaigns, developments] = await Promise.all([getCampaigns(c.slug), getDevelopments(c.slug)]);
-      const campaignItems: ActivityItem[] = campaigns.map((camp) => ({
-        kind: "campaign",
-        id: camp.id,
-        competitor_slug: c.slug,
-        competitor_name: c.name,
-        title: camp.title,
-        detail: camp.description,
-        at: camp.discovered_at,
-        discount_text: camp.discount_text,
-      }));
-      const developmentItems: ActivityItem[] = developments.map((dev) => ({
-        kind: "development",
-        id: dev.id,
-        competitor_slug: c.slug,
-        competitor_name: c.name,
-        title: dev.title,
-        detail: dev.summary,
-        at: dev.discovered_at,
-        category: dev.category,
-      }));
-      return [...campaignItems, ...developmentItems];
-    })
-  );
-  const priceMoves = await getPriceChanges(30, 5.0, 15);
-  const priceMoveItems: ActivityItem[] = priceMoves.map((m) => ({
+export async function getRecentActivity(
+  competitors: Competitor[],
+  limit = 12,
+  // Accepted pre-fetched rather than requested internally so the caller can
+  // kick this off in parallel with getCompetitors() itself (it doesn't
+  // depend on the competitor list at all) instead of paying for it as a
+  // third sequential network round-trip after the per-competitor fan-out
+  // below — confirmed live as a multi-second difference in the homepage's
+  // load time on this data volume.
+  priceMoves?: PriceMove[]
+): Promise<ActivityItem[]> {
+  const [perCompetitor, resolvedPriceMoves] = await Promise.all([
+    Promise.all(
+      competitors.map(async (c) => {
+        const [campaigns, developments] = await Promise.all([getCampaigns(c.slug), getDevelopments(c.slug)]);
+        const campaignItems: ActivityItem[] = campaigns.map((camp) => ({
+          kind: "campaign",
+          id: camp.id,
+          competitor_slug: c.slug,
+          competitor_name: c.name,
+          title: camp.title,
+          detail: camp.description,
+          at: camp.discovered_at,
+          discount_text: camp.discount_text,
+        }));
+        const developmentItems: ActivityItem[] = developments.map((dev) => ({
+          kind: "development",
+          id: dev.id,
+          competitor_slug: c.slug,
+          competitor_name: c.name,
+          title: dev.title,
+          detail: dev.summary,
+          at: dev.discovered_at,
+          category: dev.category,
+        }));
+        return [...campaignItems, ...developmentItems];
+      })
+    ),
+    priceMoves ? Promise.resolve(priceMoves) : getPriceChanges(30, 5.0, 15),
+  ]);
+  const priceMoveItems: ActivityItem[] = resolvedPriceMoves.map((m) => ({
     kind: "price_move",
     id: m.product_id,
     competitor_slug: m.competitor_slug,

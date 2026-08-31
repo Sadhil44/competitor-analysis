@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { ActivityItem, Competitor, getCompetitors, getRecentActivity } from "@/lib/api";
+import { ActivityItem, Competitor, getCompetitors, getPriceChanges, getRecentActivity } from "@/lib/api";
+import MarkdownText from "@/components/MarkdownText";
 
 function timeAgo(iso: string): string {
   const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -34,14 +35,18 @@ const STATUS_BORDER: Record<string, string> = {
 };
 
 export default async function Home() {
-  const competitors = await getCompetitors();
+  // getPriceChanges doesn't depend on the competitor list at all — starting
+  // it here lets it run alongside getCompetitors() and the per-competitor
+  // fetches inside getRecentActivity, instead of only starting once those
+  // finish (see getRecentActivity's priceMoves param).
+  const [competitors, priceMoves] = await Promise.all([getCompetitors(), getPriceChanges(30, 5.0, 15)]);
   const rivals = competitors.filter((c) => !c.is_own_brand);
   const ownBrands = competitors.filter((c) => c.is_own_brand);
   const totalProducts = competitors.reduce((sum, c) => sum + c.product_count, 0);
   const needsAttention = competitors.filter(
     (c) => c.last_crawl_status === "partial_failure" || c.last_crawl_status === "failed"
   ).length;
-  const activity = await getRecentActivity(competitors);
+  const activity = await getRecentActivity(competitors, 12, priceMoves);
 
   return (
     <div className="flex flex-col gap-10">
@@ -204,7 +209,9 @@ function ActivityFeed({ items }: { items: ActivityItem[] }) {
                     )}
                   </div>
                   {item.detail && (
-                    <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500 dark:text-zinc-500">{item.detail}</p>
+                    <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500 dark:text-zinc-500">
+                      <MarkdownText variant="inline">{item.detail}</MarkdownText>
+                    </p>
                   )}
                 </li>
               );
