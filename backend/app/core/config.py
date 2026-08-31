@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     competitors_config_path: Path = Path("/config/competitors.yaml")
     own_brands_config_path: Path = Path("/config/own_brands.yaml")
     environment: str = "development"
+    # Comma-separated extra CORS origins, added on top of the hardcoded
+    # localhost variants in app/main.py (which stay valid for local Docker
+    # Compose dev regardless of this setting) — e.g. the deployed Vercel
+    # frontend's URL in production, where there's no "localhost" at all.
+    frontend_origins: str = ""
+
+    @property
+    def frontend_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.frontend_origins.split(",") if origin.strip()]
 
 
 @lru_cache
