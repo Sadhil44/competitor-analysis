@@ -48,12 +48,6 @@ export default function RootLayout({
             >
               Ask the agent
             </Link>
-            <Link
-              href="/market/raised-beds"
-              className="text-sm text-zinc-600 transition-colors hover:text-indigo-600 dark:text-zinc-400 dark:hover:text-indigo-400"
-            >
-              Category deep-dive: Raised Beds
-            </Link>
             <NavSearchBox />
           </nav>
         </header>
