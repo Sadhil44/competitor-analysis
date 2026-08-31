@@ -185,3 +185,26 @@ async def test_import_product_feed_is_idempotent(db_session, own_brand_competito
     # Still exactly 2 observations (one per season) after two runs, not 4 —
     # this is the ON CONFLICT dedup working, not just the product-level fix.
     assert len(result.scalars().all()) == 2
+
+
+async def test_import_product_feed_skips_unmapped_brand_num_rows(db_session, tmp_path):
+    """Regression test: a brand_num with no config/own_brands.yaml entry
+    (e.g. real brand_num 66/72 — Amazon-fulfillment/retail-restock channels
+    deliberately left unmapped, see own_brands.yaml) used to raise and abort
+    the ENTIRE import on the first such row. A fresh database has no rows
+    from those channels yet, so the very first real-data import run hit
+    this immediately. Skipping the row is correct: nothing was ever meant
+    to track that channel.
+    """
+    unmapped_brand_num = random.randint(900000, 999999)
+    distinctive_sku = f"zzyx-{unmapped_brand_num}"
+    csv_path = tmp_path / "feed.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(
+            [distinctive_sku, str(unmapped_brand_num), "2204", "TEST PLANT", "PREMIUM", "F25", "9.99"]
+        )
+
+    await import_product_feed(db_session, csv_path)  # must not raise
+
+    result = await db_session.execute(select(Product).where(Product.sku == distinctive_sku))
+    assert result.scalars().first() is None

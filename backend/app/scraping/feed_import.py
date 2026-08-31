@@ -165,13 +165,18 @@ async def _import_batch(
     competitor_id_by_brand_num: dict[int, int],
     product_id_cache: dict[tuple[int, str], int],
 ) -> None:
+    # A brand_num with no config/own_brands.yaml entry isn't necessarily a
+    # data error — it's the expected shape for a channel deliberately left
+    # unmapped (e.g. brand_num 66/72, Amazon-fulfillment/retail-restock
+    # channels for an already-tracked brand — see own_brands.yaml's own
+    # comment). Skipping those rows is the correct behavior; raising would
+    # abort the entire import over rows nothing was ever meant to track.
+    rows = [row for row in rows if row.brand_num in competitor_id_by_brand_num]
+    if not rows:
+        return
+
     missing: dict[tuple[int, str], FeedRow] = {}
     for row in rows:
-        if row.brand_num not in competitor_id_by_brand_num:
-            raise ValueError(
-                f"brand_num {row.brand_num} has no matching competitor — "
-                "run seed_own_brands first or add it to config/own_brands.yaml"
-            )
         competitor_id = competitor_id_by_brand_num[row.brand_num]
         key = (competitor_id, row.sku)
         if key not in product_id_cache and key not in missing:
