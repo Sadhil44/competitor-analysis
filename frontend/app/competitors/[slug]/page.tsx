@@ -11,6 +11,7 @@ import {
   getLatestSWOT,
 } from "@/lib/api";
 import ProductsTable from "@/components/ProductsTable";
+import MarkdownText from "@/components/MarkdownText";
 
 const PRODUCTS_PER_PAGE = 50;
 
@@ -109,13 +110,17 @@ function SWOTPanel({ swot }: { swot: SWOTAnalysis | null }) {
             <h3 className="mb-2 text-sm font-semibold">{q.label}</h3>
             <ul className="list-inside list-disc space-y-1 text-sm text-zinc-700 dark:text-zinc-300">
               {q.items.map((item, i) => (
-                <li key={i}>{item}</li>
+                <li key={i}>
+                  <MarkdownText variant="inline">{item}</MarkdownText>
+                </li>
               ))}
             </ul>
           </div>
         ))}
       </div>
-      <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">{swot.source_summary}</p>
+      <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">
+        <MarkdownText variant="inline">{swot.source_summary}</MarkdownText>
+      </p>
     </section>
   );
 }
@@ -144,7 +149,9 @@ function DevelopmentsFeed({ developments }: { developments: Development[] }) {
                 <span>{new Date(d.event_date).toLocaleDateString()}</span>
               </div>
               <h3 className="mt-1 font-medium">{d.title}</h3>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{d.summary}</p>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                <MarkdownText variant="inline">{d.summary}</MarkdownText>
+              </p>
               {d.url && (
                 <a
                   href={d.url}
@@ -200,7 +207,9 @@ function CampaignsFeed({ campaigns }: { campaigns: Campaign[] }) {
                 )}
               </div>
               <h3 className="mt-1 font-medium">{c.title}</h3>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{c.description}</p>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                <MarkdownText variant="inline">{c.description}</MarkdownText>
+              </p>
               {c.source_url && (
                 <a
                   href={c.source_url}

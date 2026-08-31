@@ -10,6 +10,7 @@ import {
   getRaisedBedComparables,
 } from "@/lib/api";
 import PriceChart from "@/components/PriceChart";
+import MarkdownText from "@/components/MarkdownText";
 
 export default async function ProductPricePage({
   params,
@@ -86,7 +87,9 @@ function ProductCampaigns({ campaigns }: { campaigns: Campaign[] }) {
               )}
             </div>
             <h3 className="mt-1 font-medium">{c.title}</h3>
-            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{c.description}</p>
+            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              <MarkdownText variant="inline">{c.description}</MarkdownText>
+            </p>
             {c.source_url && (
               <a
                 href={c.source_url}

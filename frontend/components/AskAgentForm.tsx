@@ -4,8 +4,7 @@
 // (not inside the Docker network), so it needs the host-mapped API URL
 // rather than the Docker-internal one lib/api.ts uses for Server Components.
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import ReactMarkdown from "react-markdown";
-import type { Components } from "react-markdown";
+import MarkdownText from "@/components/MarkdownText";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -29,41 +28,6 @@ const TOOL_LABEL: Record<string, string> = {
   save_swot_analysis: "Saved SWOT",
   save_development: "Saved development",
   save_campaign: "Saved campaign",
-};
-
-// react-markdown renders plain HTML elements with no styling of their own
-// — mapped onto this app's existing type scale/spacing (no
-// @tailwindcss/typography dependency) so headings, bold, lists, and links
-// in an agent answer look intentional rather than like a wall of text.
-const MARKDOWN_COMPONENTS: Components = {
-  h1: ({ children }) => <h1 className="mb-2 mt-3 text-base font-semibold first:mt-0">{children}</h1>,
-  h2: ({ children }) => <h2 className="mb-2 mt-3 text-sm font-semibold first:mt-0">{children}</h2>,
-  h3: ({ children }) => <h3 className="mb-1 mt-2 text-sm font-semibold first:mt-0">{children}</h3>,
-  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-  ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
-  ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
-  li: ({ children }) => <li>{children}</li>,
-  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-  em: ({ children }) => <em className="italic">{children}</em>,
-  code: ({ children }) => (
-    <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-[0.85em] dark:bg-white/10">{children}</code>
-  ),
-  a: ({ children, href }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-sky-600 underline underline-offset-2 dark:text-sky-400"
-    >
-      {children}
-    </a>
-  ),
-  blockquote: ({ children }) => (
-    <blockquote className="mb-2 border-l-2 border-zinc-300 pl-3 text-zinc-600 last:mb-0 dark:border-zinc-700 dark:text-zinc-400">
-      {children}
-    </blockquote>
-  ),
-  hr: () => <hr className="my-3 border-zinc-200 dark:border-zinc-800" />,
 };
 
 interface ChatMessage {
@@ -231,11 +195,7 @@ function ChatBubble({ message }: { message: ChatMessage }) {
                 : "rounded-bl-sm border border-zinc-200 bg-zinc-50 text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100"
           }`}
         >
-          {isUser || message.failed ? (
-            message.content
-          ) : (
-            <ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown>
-          )}
+          {isUser || message.failed ? message.content : <MarkdownText>{message.content}</MarkdownText>}
         </div>
         {!isUser && !message.failed && (message.route || (message.toolsUsed && message.toolsUsed.length > 0)) && (
           <div className="flex flex-wrap items-center gap-1.5 px-1">
